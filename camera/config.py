@@ -18,11 +18,12 @@ LOCAL_SAVE_DIR: Final[str] = "camera/captured_images"  # 画像保存ディレ�
 IMAGE_FORMAT: Final[str] = "jpg"  # 画像フォーマット（jpg, png）
 IMAGE_QUALITY: Final[int] = 95  # JPEG品質（1-100、高いほど高品質）
 
-# AWS S3設定（後で使用）
-# AWS_REGION: Final[str] = "ap-northeast-1"  # 東京リージョン
-# S3_BUCKET_NAME: Final[str] = "your-bucket-name"  # S3バケット名
-# AWS_ACCESS_KEY_ID: Final[str] = ""  # AWSアクセスキー
-# AWS_SECRET_ACCESS_KEY: Final[str] = ""  # AWSシークレットキー
+# AWS S3設定（環境変数から読み込み、またはここで直接設定）
+import os
+AWS_REGION: Final[str] = os.getenv("AWS_REGION", "ap-northeast-1")  # 東京リージョン
+S3_BUCKET_NAME: Final[str] = os.getenv("S3_BUCKET_NAME", "wackathon-2025-trash-images")  # S3バケット名
+AWS_ACCESS_KEY_ID: Final[str] = os.getenv("AWS_ACCESS_KEY_ID", "")  # AWSアクセスキー（環境変数推奨）
+AWS_SECRET_ACCESS_KEY: Final[str] = os.getenv("AWS_SECRET_ACCESS_KEY", "")  # AWSシークレットキー（環境変数推奨）
 
 # ログ設定
 LOG_LEVEL: Final[str] = "INFO"  # ログレベル（DEBUG, INFO, WARNING, ERROR）

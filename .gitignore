@@ -1,31 +1,27 @@
 # Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
+*.py[cod]
+*$py.class
 *.so
-*.egg
-*.egg-info/
-dist/
-build/
-
-# Jupyter Notebook
-.ipynb_checkpoints/
-*.ipynb_checkpoints
-
-# Virtual Environment
+.Python
+.venv/
 venv/
-env/
 ENV/
 
-# macOS
-.DS_Store
+# AWS credentials
+.env
 
-# Data and Models
-*.pkl
-*.h5
+# Local data
+camera/captured_images/
+*.jpg
+*.png
 
-# IDE
+# IDEs
 .vscode/
 .idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

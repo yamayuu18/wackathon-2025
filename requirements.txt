@@ -1,5 +1,8 @@
 # Camera Capture Requirements
 
+# NumPy (compatible with OpenCV 4.8.x)
+numpy<2
+
 # OpenCV for camera access and image processing
 opencv-python==4.8.1.78
 
