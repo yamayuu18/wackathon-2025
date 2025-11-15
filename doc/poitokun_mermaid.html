@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ポイっとくん - 機能構成図（Mermaid版）</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: 'Hiragino Sans', 'Meiryo', sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+            margin: 0;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .mermaid {
+            text-align: center;
+            background: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🗑️ ポイっとくん - 機能構成図</h1>
+        <p class="subtitle">専用ゴミ箱の判定機能付き感情認識ゴミ箱（例：ペットボトル専用）</p>
+        
+        <div class="mermaid">
+graph TB
+    subgraph Hardware["🗑️ ハードウェア層"]
+        B[カメラ<br/>定期撮影<br/>例 1秒ごと]
+        C[スピーカー<br/>音声出力]
+    end
+    
+    subgraph AWS["☁️ AWS サービス層"]
+        D[S3バケット<br/>画像保存<br/>Lambda起動トリガー]
+        E[AWS Rekognition<br/>DetectLabels API<br/>1回で検出+識別]
+        H[AWS Polly<br/>音声合成<br/>セリフを音声化]
+    end
+    
+    subgraph Process["🔄 システム全体の処理フロー"]
+        J[①画像アップロード]
+        
+        subgraph LambdaProcess["Lambda関数内の処理"]
+            K[②画像解析]
+            L{③ラベル<br/>あり?}
+            M[④ゴミ箱設定と照合<br/>例: allowed Bottle<br/>検出 Paper]
+            O{⑤一致?}
+            P[⑥-A 正解セリフ<br/>ありがとう<br/>リサイクル頑張るね]
+            Q[⑥-B 不正解セリフ<br/>僕はペットボトル専用だよ<br/>紙は違うよ]
+            R[⑦音声生成・再生]
+            S[処理終了]
+        end
+    end
+    
+    B -->|定期撮影| J
+    J --> D
+    D -->|Lambda起動| K
+    K -->|Rekognition呼び出し| E
+    E -->|ラベルリスト<br/>例: Paper 95| K
+    K --> L
+    L -->|空リスト| S
+    L -->|ラベルあり| M
+    M --> O
+    O -->|一致| P
+    O -->|不一致| Q
+    P -->|Polly呼び出し| H
+    Q -->|Polly呼び出し| H
+    H -->|音声データ| R
+    R --> C
+    C -->|音声出力|ユーザー
+    
+    style K fill:#e1f5fe,stroke:#333,stroke-width:2px
+    style L fill:#e3f2fd,stroke:#333,stroke-width:3px
+    style O fill:#ff9999,stroke:#333,stroke-width:3px
+    style P fill:#99ff99,stroke:#333,stroke-width:2px
+    style Q fill:#ffcc99,stroke:#333,stroke-width:2px
+    style S fill:#f5f5f5,stroke:#999,stroke-width:2px
+    style Hardware fill:#ffe0e0,stroke:#ff6b6b,stroke-width:3px
+    style AWS fill:#fff8e1,stroke:#ff9800,stroke-width:3px
+    style Process fill:#e8f5e9,stroke:#4caf50,stroke-width:3px
+    style LambdaProcess fill:#fff3e0,stroke:#ff6f00,stroke-width:3px
+        </div>
+    </div>
+    
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis'
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<html>
+
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://obniz.com/js/jquery-3.2.1.min.js"></script>
+  <script src="https://unpkg.com/obniz@3.x/obniz.js"></script>
+</head>
+
+<body>
+  <script>
+    // ★自分のobniz ID
+    var obniz = new Obniz("3684-4196");
+
+    // ★さきほどデプロイした GAS の URL
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbzALohgpXc4nNjfBg-yac0bTSmEaNP74YYBiMboSFbf8Y90SHkiNbShuKuVxZfZPiW6/exec";
+
+    let lastSentTime = 0;
+    const SEND_INTERVAL_MS = 60 * 1000; // 60秒に1回だけLINE送信
+
+    function sendDistanceToServer(distance) {
+      fetch(GAS_URL, {
+        method: "POST",
+        mode: "no-cors",
+        headers: {
+          "Content-Type": "text/plain"
+        },
+        body: JSON.stringify({ distance: distance })
+      }).catch(err => {
+        console.error("sendDistanceToServer error:", err);
+      });
+    }
+
+    obniz.onconnect = async function () {
+      const hcsr04 = obniz.wired("HC-SR04", { gnd: 0, echo: 1, trigger: 2, vcc: 3 });
+
+      obniz.onloop = async function () {
+        let avg = 0;
+        let count = 0;
+        for (let i = 0; i < 3; i++) {
+          const val = await hcsr04.measureWait();
+          if (val) {
+            count++;
+            avg += val;
+          }
+        }
+        if (count > 0) {
+          avg /= count;
+        }
+
+        console.log("distance:", avg);
+
+        const now = Date.now();
+        // 60秒ごとに1回だけGASに送る例
+        if (now - lastSentTime > SEND_INTERVAL_MS) {
+          lastSentTime = now;
+          sendDistanceToServer(avg);
+        }
+
+        await obniz.wait(100);
+      }
+    };
+  </script>
+</body>
+
+</html>
