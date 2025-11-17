@@ -10,6 +10,7 @@ ENV/
 
 # AWS credentials
 .env
+.aws_temp_credentials.json
 
 # Local data
 camera/captured_images/
