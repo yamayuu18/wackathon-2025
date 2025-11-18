@@ -1,12 +1,17 @@
 """
 ゴミ分別判定Lambda関数
 
-AWS Rekognitionの検出結果を受け取り、
+S3イベントをトリガーにして画像を取得し、
+AWS Rekognitionで画像認識を行い、
 正しいゴミ分別かどうかを判定して音声メッセージを生成します。
 """
 
 import json
+import traceback
 from typing import Any, Final, Optional
+from urllib.parse import unquote_plus
+
+import boto3
 
 from waste_categories import (
     CONFIDENCE_THRESHOLD,
@@ -14,23 +19,56 @@ from waste_categories import (
     is_prohibited,
 )
 
+# AWS クライアントの初期化
+rekognition = boto3.client("rekognition")
+s3 = boto3.client("s3")
+
 
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """
     Lambda関数のエントリーポイント
 
     Parameters:
-        event: S3イベントとRekognition結果を含む辞書
+        event: S3イベント情報を含む辞書
         context: Lambda実行コンテキスト
 
     Returns:
         判定結果と音声メッセージを含む辞書
     """
-    try:
-        # Rekognitionの検出結果を取得
-        rekognition_labels = event.get("rekognition_labels", [])
+    print(f"[INFO] Lambda 関数開始")
+    print(f"[DEBUG] Event: {json.dumps(event, ensure_ascii=False)}")
 
-        if not rekognition_labels:
+    try:
+        # S3イベントからバケット名とオブジェクトキーを取得
+        if "Records" not in event:
+            print("[ERROR] S3イベントにRecordsが含まれていません")
+            return create_response(
+                is_valid=False,
+                message="イベント形式が不正です。",
+                detected_items=[],
+                error="No Records in event",
+            )
+
+        record = event["Records"][0]
+        bucket = record["s3"]["bucket"]["name"]
+        key = unquote_plus(record["s3"]["object"]["key"])
+
+        print(f"[INFO] S3イベント受信: {bucket}/{key}")
+
+        # Rekognitionで画像を解析
+        print(f"[INFO] Rekognition DetectLabels を呼び出し中...")
+        rekognition_response = rekognition.detect_labels(
+            Image={"S3Object": {"Bucket": bucket, "Name": key}},
+            MaxLabels=20,  # より多くのラベルを取得
+            MinConfidence=60.0,  # 信頼度を下げて検出しやすく
+        )
+
+        labels = rekognition_response.get("Labels", [])
+        print(f"[INFO] Rekognition 検出ラベル数: {len(labels)}")
+        print(f"[DEBUG] Labels: {json.dumps(labels, ensure_ascii=False)}")
+
+        if not labels:
+            print("[WARN] ラベルが検出されませんでした")
             return create_response(
                 is_valid=False,
                 message="ゴミが検出されませんでした。もう一度お試しください。",
@@ -38,17 +76,20 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             )
 
         # ラベルを解析して判定
-        result = validate_waste(rekognition_labels)
+        result = validate_waste(labels)
+        print(f"[INFO] 判定完了: {json.dumps(result, ensure_ascii=False)}")
 
         return result
 
     except Exception as e:
-        print(f"Error in lambda_handler: {str(e)}")
+        error_msg = f"予期しないエラー: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        print(f"[ERROR] Traceback:\n{traceback.format_exc()}")
         return create_response(
             is_valid=False,
             message="システムエラーが発生しました。管理者に連絡してください。",
             detected_items=[],
-            error=str(e),
+            error=error_msg,
         )
 
 
@@ -150,19 +191,21 @@ def create_response(
     """
     response = {
         "statusCode": 200,
-        "body": json.dumps({
-            "is_valid": is_valid,
-            "message": message,
-            "detected_items": detected_items,
-            "categories": categories or [],
-            "prohibited_items": prohibited_items or [],
-        }, ensure_ascii=False),
+        "body": json.dumps(
+            {
+                "is_valid": is_valid,
+                "message": message,
+                "detected_items": detected_items,
+                "categories": categories or [],
+                "prohibited_items": prohibited_items or [],
+            },
+            ensure_ascii=False,
+        ),
     }
 
     if error:
-        response["body"] = json.dumps({
-            **json.loads(response["body"]),
-            "error": error,
-        }, ensure_ascii=False)
+        response["body"] = json.dumps(
+            {**json.loads(response["body"]), "error": error}, ensure_ascii=False
+        )
 
     return response

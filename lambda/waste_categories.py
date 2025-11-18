@@ -35,6 +35,13 @@ ALLOWED_WASTE_CATEGORIES: Final[dict[str, list[str]]] = {
         "Cutlery",
         "Straw",
         "PET Bottle",
+        "Beverage",
+        "Drink",
+        "Drink Container",
+        "Recycling",
+        "Disposable",
+        "Food Container",
+        "Takeout",
     ],
     "缶・ビン": [
         "Can",
@@ -51,6 +58,9 @@ ALLOWED_WASTE_CATEGORIES: Final[dict[str, list[str]]] = {
         "Plastic Bottle",
         "Water Bottle",
         "Drink Bottle",
+        "Bottle",  # 汎用的なボトルもペットボトルとして認識
+        "Beverage Bottle",
+        "Soda Bottle",
     ],
 }
 
@@ -74,7 +84,7 @@ PROHIBITED_ITEMS: Final[list[str]] = [
 ]
 
 # 信頼度の閾値（Rekognitionのスコアがこれ以上の場合のみ採用）
-CONFIDENCE_THRESHOLD: Final[float] = 70.0
+CONFIDENCE_THRESHOLD: Final[float] = 60.0  # 検出精度を上げるため閾値を下げる
 
 
 def get_waste_category(label: str) -> Optional[str]:
