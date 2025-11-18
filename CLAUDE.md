@@ -60,11 +60,13 @@ This is a Wackathon 2025 project for an emotion-aware trash bin system that vali
 - `test_cache.py`: Utility for testing credential cache functionality
 - `captured_images/`: Local storage directory (gitignored)
 
-**lambda/** - Waste validation logic (local implementation, AWS deployment pending)
+**lambda/** - Waste validation and voice generation logic
 - `waste_categories.py`: Category definitions and Rekognition label mappings
-- `waste_validator.py`: Core validation logic for Lambda function
+- `waste_validator.py`: Core validation logic with Polly integration
+- `polly_config.py`: AWS Polly voice synthesis configuration
 - `mock_data.py`: 9 test cases covering valid/invalid/edge scenarios
 - `test_local.py`: Local test runner (9/9 tests passing)
+- `waste_recognition.zip`: Deployment package for AWS Lambda
 
 **obniz/** - Hardware integration
 - `index.html`: HC-SR04 ultrasonic sensor integration with GAS backend
@@ -101,10 +103,153 @@ All settings centralized in [camera/config.py](camera/config.py) using environme
 - Environment-based configuration
 
 **Pending AWS Deployment**:
-- Lambda function deployment to AWS
+- Lambda function deployment to AWS with updated code
 - S3 event trigger configuration
-- Rekognition DetectLabels integration
-- Polly text-to-speech integration
+- IAM role permission updates for Polly and S3 voice bucket
+
+## AWS Polly Integration
+
+### Voice Synthesis Setup
+
+The Lambda function now includes AWS Polly integration for generating voice feedback:
+
+**Configuration** ([lambda/polly_config.py](lambda/polly_config.py)):
+- Engine: `neural` (high-quality voice synthesis)
+- Voice ID: `Takumi` (Japanese male voice)
+- Output format: MP3 (24kHz sample rate)
+- Voice bucket: `wackathon-2025-voice-responses` (configurable via environment variable)
+
+**Audio File Naming**:
+- Format: `voice_response_YYYYMMDD_HHMMSS.mp3`
+- Storage: Separate S3 bucket for voice files
+
+### Lambda Deployment Steps
+
+1. **Create S3 Voice Bucket** (AWS Console or CLI):
+   ```bash
+   aws s3 mb s3://wackathon-2025-voice-responses --region ap-northeast-1
+   ```
+
+2. **Update Lambda IAM Role Permissions**:
+   Add the following policies to the Lambda execution role:
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": [
+           "polly:SynthesizeSpeech"
+         ],
+         "Resource": "*"
+       },
+       {
+         "Effect": "Allow",
+         "Action": [
+           "s3:PutObject"
+         ],
+         "Resource": "arn:aws:s3:::wackathon-2025-voice-responses/*"
+       }
+     ]
+   }
+   ```
+
+3. **Upload Lambda Function**:
+   - Go to AWS Lambda Console
+   - Select `waste-recognition-function`
+   - Upload `lambda/waste_recognition.zip`
+   - Handler: `waste_validator.lambda_handler`
+
+4. **Set Environment Variables** (Lambda Console):
+   - Key: `VOICE_BUCKET_NAME`
+   - Value: `wackathon-2025-voice-responses`
+
+5. **Test the Function**:
+   - Upload test image to S3 images bucket
+   - Check CloudWatch Logs for:
+     - `[INFO] Polly音声合成開始`
+     - `[INFO] 音声合成完了`
+     - `[INFO] 音声URL生成完了`
+   - Verify audio file created in voice bucket
+
+### Response Format
+
+The Lambda function now returns audio URL in the response:
+
+```json
+{
+  "statusCode": 200,
+  "body": {
+    "is_valid": true,
+    "message": "ありがとうございます！プラスチックとして正しく分別されています。",
+    "audio_url": "https://wackathon-2025-voice-responses.s3.ap-northeast-1.amazonaws.com/voice_response_20251118_123456.mp3",
+    "detected_items": ["Bottle (89.1%)"],
+    "categories": ["プラスチック", "ペットボトル"],
+    "prohibited_items": []
+  }
+}
+```
+
+### Troubleshooting
+
+**Polly synthesis fails**:
+- Check IAM role has `polly:SynthesizeSpeech` permission
+- Verify VoiceId "Takumi" is available in ap-northeast-1 region
+- Check CloudWatch Logs for detailed error messages
+
+**S3 upload fails**:
+- Verify voice bucket exists: `aws s3 ls s3://wackathon-2025-voice-responses`
+- Check IAM role has `s3:PutObject` permission for voice bucket
+- Ensure bucket is in same region as Lambda (ap-northeast-1)
+
+**Audio URL returns null**:
+- Check CloudWatch Logs for Polly/S3 errors
+- Verify environment variable `VOICE_BUCKET_NAME` is set correctly
+- Function will continue to work even if voice generation fails (message text is still returned)
+
+### Common IAM Permission Errors
+
+**Error: AccessDenied - polly:SynthesizeSpeech**
+```
+User: arn:aws:sts::438632968703:assumed-role/WackathonLambdaRole/wackathon-waste-recognition
+is not authorized to perform: polly:SynthesizeSpeech
+```
+**Cause**: Lambda execution role (WackathonLambdaRole) lacks Polly permission
+**Solution**: Add `polly:SynthesizeSpeech` to WackathonLambdaRole (not user policy)
+
+**Error: AccessDenied - s3:PutObject on voice bucket**
+```
+is not authorized to perform: s3:PutObject on resource:
+"arn:aws:s3:::wackathon-2025-voice-responses/voice_response_*.mp3"
+```
+**Cause**: Lambda execution role lacks S3 voice bucket write permission
+**Solution**: Add `s3:PutObject` for `arn:aws:s3:::wackathon-2025-voice-responses/*` to WackathonLambdaRole
+
+**Important**: Lambda execution role and user IAM policy are separate. Lambda functions use the execution role, not user credentials.
+
+## IAM Permission Configuration
+
+### Lambda Execution Role (WackathonLambdaRole)
+Required permissions for Lambda function runtime:
+
+| Service | Action | Resource | Purpose |
+|---------|--------|----------|---------|
+| Rekognition | `DetectLabels` | `*` | Image recognition |
+| S3 | `GetObject` | `wackathon-2025-trash-images/*` | Read uploaded images |
+| Polly | `SynthesizeSpeech` | `*` | Generate voice responses |
+| S3 | `PutObject` | `wackathon-2025-voice-responses/*` | Save audio files |
+| CloudWatch Logs | `CreateLogGroup`, `CreateLogStream`, `PutLogEvents` | `*` | Logging |
+
+### IAM User Permissions
+Required permissions for manual operations (camera upload, Lambda deployment):
+
+| Operation | Action | Resource | Purpose |
+|-----------|--------|----------|---------|
+| Image upload | `s3:PutObject` | `wackathon-2025-trash-images/*` | Camera → S3 |
+| Lambda update | `lambda:UpdateFunctionCode` | Lambda function ARN | Deploy code |
+| IAM management | `iam:*` | Roles/Policies | Configure permissions |
+
+**Key Distinction**: User policies do NOT affect Lambda execution. Lambda uses its execution role exclusively.
 
 ### Code Style
 - Type hints: Use `Final`, `Optional`, `list[Type]` for all parameters and returns

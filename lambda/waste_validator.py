@@ -8,11 +8,21 @@ AWS Rekognitionで画像認識を行い、
 
 import json
 import traceback
+from datetime import datetime
 from typing import Any, Final, Optional
 from urllib.parse import unquote_plus
 
 import boto3
 
+from polly_config import (
+    OUTPUT_FORMAT,
+    SAMPLE_RATE,
+    VOICE_BUCKET_NAME,
+    VOICE_ENGINE,
+    VOICE_FILE_EXTENSION,
+    VOICE_FILE_PREFIX,
+    VOICE_ID,
+)
 from waste_categories import (
     CONFIDENCE_THRESHOLD,
     get_waste_category,
@@ -22,6 +32,7 @@ from waste_categories import (
 # AWS クライアントの初期化
 rekognition = boto3.client("rekognition")
 s3 = boto3.client("s3")
+polly = boto3.client("polly")
 
 
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -167,6 +178,58 @@ def validate_waste(labels: list[dict[str, Any]]) -> dict[str, Any]:
     )
 
 
+def generate_audio_with_polly(message: str) -> Optional[str]:
+    """
+    AWS Pollyで音声を生成しS3に保存
+
+    Parameters:
+        message: 音声化するテキストメッセージ
+
+    Returns:
+        音声ファイルのS3 URL、失敗時はNone
+    """
+    try:
+        print(f"[INFO] Polly音声合成開始: {message}")
+
+        # Pollyで音声合成
+        polly_response = polly.synthesize_speech(
+            Text=message,
+            Engine=VOICE_ENGINE,
+            VoiceId=VOICE_ID,
+            OutputFormat=OUTPUT_FORMAT,
+            SampleRate=SAMPLE_RATE,
+        )
+
+        # 音声データを取得
+        audio_stream = polly_response["AudioStream"].read()
+        print(f"[INFO] 音声合成完了: {len(audio_stream)} bytes")
+
+        # S3に保存するファイル名を生成
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        audio_key = f"{VOICE_FILE_PREFIX}{timestamp}{VOICE_FILE_EXTENSION}"
+
+        # S3に音声ファイルをアップロード
+        print(f"[INFO] S3アップロード開始: {VOICE_BUCKET_NAME}/{audio_key}")
+        s3.put_object(
+            Bucket=VOICE_BUCKET_NAME,
+            Key=audio_key,
+            Body=audio_stream,
+            ContentType=f"audio/{OUTPUT_FORMAT}",
+        )
+
+        # S3 URLを生成
+        audio_url = f"https://{VOICE_BUCKET_NAME}.s3.ap-northeast-1.amazonaws.com/{audio_key}"
+        print(f"[INFO] 音声URL生成完了: {audio_url}")
+
+        return audio_url
+
+    except Exception as e:
+        error_msg = f"Polly音声生成エラー: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        print(f"[ERROR] Traceback:\n{traceback.format_exc()}")
+        return None
+
+
 def create_response(
     is_valid: bool,
     message: str,
@@ -189,12 +252,16 @@ def create_response(
     Returns:
         JSON形式のレスポンス辞書
     """
+    # 音声生成
+    audio_url = generate_audio_with_polly(message)
+
     response = {
         "statusCode": 200,
         "body": json.dumps(
             {
                 "is_valid": is_valid,
                 "message": message,
+                "audio_url": audio_url,  # 音声URLを追加
                 "detected_items": detected_items,
                 "categories": categories or [],
                 "prohibited_items": prohibited_items or [],
