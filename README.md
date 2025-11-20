@@ -1,79 +1,87 @@
-# Wackathon 2025 - ゴミ箱発話システム
+# Wackathon 2025 - 感情を持ったゴミ箱システム「ポイっとくん」
 
-PCのカメラから画像を取得し、AWS S3にアップロードするシステムです。
+PCカメラでゴミを認識し、OpenAI API (GPT-4o-mini) を活用して分別判定や音声フィードバックを行うスマートゴミ箱システムです。
+
+## 主な機能
+
+- **画像認識**: カメラで撮影した画像を解析し、ゴミの種類（燃えるゴミ、プラスチック、缶・ビン、ペットボトル）を判定。
+- **高度な判定**:
+    - **ペットボトルのラベル剥離**: ラベルが剥がされていない場合、剥がすよう促します。
+    - **ゴミ箱満杯検知**: ゴミ箱が溢れそうな場合、回収を依頼します。
+    - **禁止物検知**: 電池やライターなどの危険物を検知し、警告します。
+- **音声フィードバック**: 親しみやすいキャラクター「ポイっとくん」が、状況に合わせて音声で話しかけます（OpenAI TTS 利用）。
+- **距離センサー連携**: Obniz + 超音波センサーでゴミ箱への接近を検知（Google Apps Script連携）。
+
+## システムアーキテクチャ
+
+1. **PCカメラ**: 5秒ごとに画像を撮影し、AWS S3 にアップロード。
+2. **AWS S3**: 画像が保存されるとイベント通知を発火。
+3. **AWS Lambda**: イベントを受け取り、OpenAI API を呼び出して画像を解析。
+4. **OpenAI API**:
+    - `gpt-4o-mini` (Vision): 画像解析・判定。
+    - `gpt-4o-mini-tts`: 音声データ生成。
+5. **スピーカー**: 生成された音声（S3経由）を再生（※現在はURL生成まで）。
 
 ## プロジェクト構成
 
 ```
 Wackathon/2025/
 ├── camera/
-│   ├── camera_capture.py      # カメラ撮影プログラム（ローカル保存版）
-│   ├── camera_to_s3.py         # AWS S3アップロード版（未実装）
+│   ├── camera_to_s3_mfa.py     # メイン: MFA認証付きS3アップロード
 │   ├── config.py               # 設定ファイル
-│   └── captured_images/        # ローカル保存用ディレクトリ
+│   ├── test_cache.py           # 認証情報キャッシュテスト
+│   └── captured_images/        # ローカル保存用（.gitignore）
+├── lambda/
+│   ├── waste_validator.py      # Lambda関数エントリーポイント
+│   ├── openai_utils.py         # OpenAI API 連携ロジック
+│   ├── test_local.py           # ローカルテストスクリプト
+│   ├── deploy_lambda.md        # デプロイ手順書
+│   └── aws_test_event.json     # テスト用イベントテンプレート
 ├── obniz/
-│   └── index.html              # obniz距離センサー連携
+│   └── index.html              # Obniz 距離センサー連携
 ├── doc/
 │   └── poitokun_mermaid.html   # システム構成図
-├── requirements.txt            # Pythonライブラリ依存関係
+├── requirements.txt            # 依存ライブラリ
+├── CLAUDE.md                   # 開発ガイドライン
+├── AGENTS.md                   # AIエージェント協働ガイドライン
 └── README.md                   # このファイル
 ```
 
-## セットアップ
+## セットアップと実行
 
-### 1. 必要なライブラリのインストール
+### 1. 環境構築
 
 ```bash
+# 依存ライブラリのインストール
 pip install -r requirements.txt
 ```
 
-### 2. カメラ撮影プログラムの実行
+### 2. AWS設定 (.env)
 
-```bash
-cd camera
-python camera_capture.py
+プロジェクトルートに `.env` ファイルを作成し、以下の情報を設定してください。
+
+```ini
+AWS_REGION=ap-northeast-1
+S3_BUCKET_NAME=wackathon-2025-trash-images
+AWS_ACCESS_KEY_ID=your_access_key
+AWS_SECRET_ACCESS_KEY=your_secret_key
+MFA_SERIAL_NUMBER=arn:aws:iam::...:mfa/...
 ```
 
-プログラムが起動すると、5秒ごとにカメラから画像を取得し、`camera/captured_images/` に保存します。
+### 3. カメラ・アップロードの実行
 
-### 3. 終了方法
+MFA認証（多要素認証）を使用してS3へアップロードします。
 
-`Ctrl+C` でプログラムを停止できます。
+```bash
+python camera/camera_to_s3_mfa.py
+```
 
-## 設定のカスタマイズ
+初回実行時は、認証アプリ（Google Authenticator等）の6桁のコード入力が求められます。認証情報は12時間キャッシュされます。
 
-[camera/config.py](camera/config.py) で以下の設定を変更できます：
+### 4. Lambda デプロイ
 
-- `CAPTURE_INTERVAL_SECONDS`: 撮影間隔（デフォルト: 5秒）
-- `CAMERA_DEVICE_ID`: カメラデバイスID（デフォルト: 0）
-- `IMAGE_WIDTH`, `IMAGE_HEIGHT`: 画像解像度（デフォルト: 1280x720）
-- `IMAGE_QUALITY`: JPEG品質（1-100、デフォルト: 95）
+AWS Lambda へのデプロイ方法は [lambda/deploy_lambda.md](lambda/deploy_lambda.md) を参照してください。
 
-## AWS S3連携（今後実装予定）
+## 開発ガイドライン
 
-AWS環境が提供され次第、以下の機能を実装します：
-
-1. `camera_to_s3.py`: 撮影した画像を自動的にS3バケットにアップロード
-2. AWS認証情報の設定（環境変数または`.env`ファイル）
-3. S3バケット名とリージョンの設定
-
-## システム構成
-
-システム全体の構成図は [doc/poitokun_mermaid.html](doc/poitokun_mermaid.html) を参照してください。
-
-## トラブルシューティング
-
-### カメラが開けない場合
-
-- カメラが他のアプリケーションで使用中でないか確認
-- `config.py` の `CAMERA_DEVICE_ID` を変更してみる（0 → 1）
-- カメラのアクセス許可が必要な場合があります（macOSの場合、システム環境設定 > セキュリティとプライバシー > カメラ）
-
-### 画像が保存されない場合
-
-- `camera/captured_images/` ディレクトリの書き込み権限を確認
-- ディスク容量を確認
-
-## ライセンス
-
-Wackathon 2025 プロジェクト用
+詳細な開発ルールやコードスタイルについては [CLAUDE.md](CLAUDE.md) を参照してください。
