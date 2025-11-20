@@ -15,13 +15,15 @@
 - 2回目以降（12時間以内）はキャッシュされた認証情報を自動使用
 - 停止: `Ctrl+C`
 
-### 認証情報キャッシュ管理
-- テストキャッシュ作成: `python camera/test_cache.py create`
-- キャッシュ状態確認: `python camera/test_cache.py check`
-- 期限切れキャッシュ作成: `python camera/test_cache.py expired`
-- キャッシュ削除: `python camera/test_cache.py delete`
+### Lambda デプロイ & テスト
+- **デプロイ手順**: `deploy_lambda.md` を参照してください。
+    - 依存ライブラリ（`openai` 等）を含めた zip 作成手順
+    - AWS CLI を使ったデプロイコマンド
+- **テストイベント**: `aws_test_event.json` を使用してください。
+    - S3 イベントの JSON テンプレート
+    - バケット名とオブジェクトキーを環境に合わせて書き換えて使用
 
-### Lambda バリデーションテスト
+### Lambda バリデーションテスト (ローカル)
 - ローカルテスト実行: `python lambda/test_local.py`
 - テスト内容: 正常系（ラベルなしペットボトル）、異常系（ラベルあり、禁止物）、ゴミ箱満杯検知
 
@@ -48,83 +50,41 @@ Wackathon 2025 向けの「感情を持ったゴミ箱システム」です。Op
 - モデル: `gpt-4o-mini` (Vision)
 - 判定項目:
     - ゴミ種別（燃えるゴミ、プラスチック、缶・ビン、ペットボトル）
-    - **ペットボトルのラベル有無**: ラベルがある場合は「不正」と判定
+    - **ペットボトルのラベル有無**: ラベルがある場合は「不正」と判定（透明度やパッケージで判断）
     - **ゴミ箱の満杯検知**: 画像から溢れそうな状態を検知
     - **禁止物**: 電池、ライター、危険物などを検知
 
 **音声生成 (OpenAI)**:
-- モデル: `gpt-4o-mini-tts` (または `tts-1`)
-- キャラクター: 「ポイとくん」（親しみやすい口調）
+- モデル: `gpt-4o-mini-tts`
+- キャラクター: 「ポイっとくん」（親しみやすい口調）
+- **エラー時**: システムエラー発生時は音声生成をスキップ
 
 ### 主要コンポーネント
 
 **camera/** - 画像キャプチャと S3 アップロード
-- `config.py`: 環境変数対応の設定ファイル
 - `camera_to_s3_mfa.py`: MFA認証、キャッシュ、S3アップロードを行うメインスクリプト
-- `test_cache.py`: 認証情報キャッシュのテストユーティリティ
-- `captured_images/`: ローカル保存ディレクトリ (gitignored)
+- `config.py`: 設定ファイル
 
 **lambda/** - 分別判定と音声生成ロジック
 - `waste_validator.py`: メインの Lambda ハンドラー
 - `openai_utils.py`: OpenAI API (Vision/TTS) との連携ロジックとプロンプト定義
-- `test_local.py`: OpenAI API をモックしたローカルテストランナー
-- `polly_config.py`: (旧) Polly設定。※OpenAI移行に伴い、S3バケット名などの定数のみ利用中
+- `test_local.py`: ローカルテストランナー
+- `deploy_lambda.md`: デプロイ手順書
+- `aws_test_event.json`: テスト用イベントテンプレート
 
 **obniz/** - ハードウェア連携
-- `index.html`: HC-SR04 超音波センサー連携、GAS へのデータ送信
-
-**doc/** - ドキュメント
-- `poitokun_mermaid.html`: システムフロー図
+- `index.html`: HC-SR04 超音波センサー連携
 
 ### 設定管理
-
-**カメラ設定** (`camera/config.py`):
-- `CAMERA_DEVICE_ID`, `IMAGE_WIDTH`, `IMAGE_HEIGHT`, `CAPTURE_INTERVAL_SECONDS` 等
 
 **AWS設定** (`.env`):
 - `AWS_REGION`, `S3_BUCKET_NAME`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `MFA_SERIAL_NUMBER`
 
 **OpenAI設定** (Lambda環境変数):
 - `OPENAI_API_KEY`: OpenAI API キー (**必須**)
-
-### AWS 統合状況
-
-**完了**:
-- MFA付き S3 アップロード
-- Lambda ロジック (OpenAI 対応版) のローカル実装・テスト
-- クレデンシャルキャッシュシステム
-
-**AWS デプロイ待ち**:
-- Lambda 関数の AWS へのデプロイ（`openai` ライブラリを含むレイヤーまたはパッケージが必要）
-- Lambda 環境変数 `OPENAI_API_KEY` の設定
-- S3 イベントトリガーの設定
-
-## OpenAI API 統合
-
-### 移行の背景
-AWS Rekognition では困難だった「ペットボトルのラベル剥がし忘れ」の判定や、「ゴミ箱の満杯検知」を実現するため、GPT-4o-mini に移行しました。
-
-### レスポンス形式
-Lambda は以下の形式で JSON を返します：
-
-```json
-{
-  "statusCode": 200,
-  "body": {
-    "is_valid": true,
-    "message": "ありがとうございます！...",
-    "audio_url": "https://...",
-    "detected_items": ["Plastic Bottle"],
-    "categories": ["ペットボトル"],
-    "prohibited_items": [],
-    "label_removed": true,
-    "is_full": false
-  }
-}
-```
+- `VOICE_BUCKET_NAME`: 音声保存用S3バケット名
 
 ### コードスタイル
-- 型ヒント: `Final`, `Optional`, `list[Type]` 等を使用
-- インポート順序: 標準ライブラリ → サードパーティ → ローカル
-- Docstrings: Google スタイル
 - 言語: **日本語** (コメント、ドキュメント含む)
+- 型ヒント: `Final`, `Optional`, `list[Type]` 等を使用
+- フォーマッタ: Black / isort 推奨
