@@ -11,3 +11,4 @@ boto3==1.34.34
 
 # Python dotenv for environment variable management
 python-dotenv==1.0.0
+openai

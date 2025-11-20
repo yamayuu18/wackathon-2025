@@ -1,260 +1,130 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+このファイルは、このリポジトリでコードを扱う際の Claude Code (claude.ai/code) 向けのガイドラインです。
 
-## Build/Run/Test Commands
+## ビルド/実行/テスト コマンド
 
-### Environment Setup
-- Install dependencies: `pip install -r requirements.txt`
-- Create virtual environment: `uv venv` or `python -m venv .venv`
-- Activate environment: `source .venv/bin/activate`
+### 環境セットアップ
+- 依存関係のインストール: `pip install -r requirements.txt`
+- 仮想環境の作成: `uv venv` または `python -m venv .venv`
+- 環境のアクティベート: `source .venv/bin/activate`
 
-### Camera & S3 Upload (MFA Required)
-- Run camera with S3 upload: `python camera/camera_to_s3_mfa.py`
-- First run requires MFA code input (6 digits from authenticator app)
-- Subsequent runs (within 12 hours) use cached credentials automatically
-- Stop program: Press `Ctrl+C`
+### カメラ & S3 アップロード (MFA必須)
+- カメラ実行とS3アップロード: `python camera/camera_to_s3_mfa.py`
+- 初回実行時はMFAコード（認証アプリの6桁）の入力が必要
+- 2回目以降（12時間以内）はキャッシュされた認証情報を自動使用
+- 停止: `Ctrl+C`
 
-### Credential Cache Management
-- Create test cache: `python camera/test_cache.py create`
-- Check cache status: `python camera/test_cache.py check`
-- Create expired cache: `python camera/test_cache.py expired`
-- Delete cache: `python camera/test_cache.py delete`
+### 認証情報キャッシュ管理
+- テストキャッシュ作成: `python camera/test_cache.py create`
+- キャッシュ状態確認: `python camera/test_cache.py check`
+- 期限切れキャッシュ作成: `python camera/test_cache.py expired`
+- キャッシュ削除: `python camera/test_cache.py delete`
 
-### Lambda Validation Testing
-- Run all tests: `python lambda/test_local.py`
-- Tests include: valid waste categories, prohibited items, mixed scenarios, edge cases
+### Lambda バリデーションテスト
+- ローカルテスト実行: `python lambda/test_local.py`
+- テスト内容: 正常系（ラベルなしペットボトル）、異常系（ラベルあり、禁止物）、ゴミ箱満杯検知
 
-## System Architecture
+## システムアーキテクチャ
 
-This is a Wackathon 2025 project for an emotion-aware trash bin system that validates proper waste disposal.
+Wackathon 2025 向けの「感情を持ったゴミ箱システム」です。OpenAI API を活用して高度な判断を行います。
 
-### High-Level Architecture Flow
-1. **PC Camera** → Captures images periodically (5-second intervals)
-2. **MFA Authentication** → AWS STS generates 12-hour temporary credentials
-3. **AWS S3** → Stores uploaded images, triggers Lambda via S3 event
-4. **AWS Rekognition** → Analyzes images using DetectLabels API
-5. **Lambda Function** → Validates labels against allowed waste categories
-6. **AWS Polly** → Generates voice feedback based on validation results
-7. **Speaker** → Plays audio response to user
+### ハイレベル・アーキテクチャフロー
+1. **PCカメラ** → 定期的（5秒間隔）に画像をキャプチャ
+2. **MFA認証** → AWS STS で12時間有効な一時クレデンシャルを取得
+3. **AWS S3** → 画像をアップロード、S3イベントで Lambda をトリガー
+4. **OpenAI API (GPT-4o-mini)** → 画像解析（分別判定、ラベル有無、満杯検知）
+5. **Lambda関数** → 解析結果に基づき応答を生成
+6. **OpenAI API (GPT-4o-mini-tts)** → 音声データを生成し S3 に保存
+7. **スピーカー** → 生成された音声を再生
 
-### Critical Implementation Details
+### 重要な実装詳細
 
-**MFA Authentication Flow (Organizations SCP Requirement)**:
-- AWS Organizations SCP blocks standard IAM credentials for S3 operations
-- Solution: MFA + STS temporary credentials bypass SCP restrictions
-- Credentials cached for 12 hours in `camera/.aws_temp_credentials.json`
-- Auto-validation checks expiration (5-minute buffer before re-auth)
+**MFA認証フロー (Organizations SCP対策)**:
+- AWS Organizations SCP により S3 操作には MFA が必須
+- `camera/camera_to_s3_mfa.py` で STS 一時クレデンシャルを管理・キャッシュ
 
-**Waste Validation Logic**:
-- Confidence threshold: 70% (configurable in `lambda/waste_categories.py`)
-- Categories: 燃えるゴミ, プラスチック, 缶・ビン, ペットボトル
-- Prohibited items: batteries, electronics, medical waste, hazardous materials
-- Validation returns appropriate voice message for Polly TTS
+**ゴミ分別・判定ロジック (OpenAI)**:
+- モデル: `gpt-4o-mini` (Vision)
+- 判定項目:
+    - ゴミ種別（燃えるゴミ、プラスチック、缶・ビン、ペットボトル）
+    - **ペットボトルのラベル有無**: ラベルがある場合は「不正」と判定
+    - **ゴミ箱の満杯検知**: 画像から溢れそうな状態を検知
+    - **禁止物**: 電池、ライター、危険物などを検知
 
-### Key Components
+**音声生成 (OpenAI)**:
+- モデル: `gpt-4o-mini-tts` (または `tts-1`)
+- キャラクター: 「ポイとくん」（親しみやすい口調）
 
-**camera/** - Image capture and S3 upload
-- `config.py`: Centralized configuration with environment variable support
-- `camera_to_s3_mfa.py`: Main script with MFA auth, credential caching, S3 upload
-- `test_cache.py`: Utility for testing credential cache functionality
-- `captured_images/`: Local storage directory (gitignored)
+### 主要コンポーネント
 
-**lambda/** - Waste validation and voice generation logic
-- `waste_categories.py`: Category definitions and Rekognition label mappings
-- `waste_validator.py`: Core validation logic with Polly integration
-- `polly_config.py`: AWS Polly voice synthesis configuration
-- `mock_data.py`: 9 test cases covering valid/invalid/edge scenarios
-- `test_local.py`: Local test runner (9/9 tests passing)
-- `waste_recognition.zip`: Deployment package for AWS Lambda
+**camera/** - 画像キャプチャと S3 アップロード
+- `config.py`: 環境変数対応の設定ファイル
+- `camera_to_s3_mfa.py`: MFA認証、キャッシュ、S3アップロードを行うメインスクリプト
+- `test_cache.py`: 認証情報キャッシュのテストユーティリティ
+- `captured_images/`: ローカル保存ディレクトリ (gitignored)
 
-**obniz/** - Hardware integration
-- `index.html`: HC-SR04 ultrasonic sensor integration with GAS backend
-- Sends distance data to Google Apps Script URL every 60 seconds
+**lambda/** - 分別判定と音声生成ロジック
+- `waste_validator.py`: メインの Lambda ハンドラー
+- `openai_utils.py`: OpenAI API (Vision/TTS) との連携ロジックとプロンプト定義
+- `test_local.py`: OpenAI API をモックしたローカルテストランナー
+- `polly_config.py`: (旧) Polly設定。※OpenAI移行に伴い、S3バケット名などの定数のみ利用中
 
-**doc/** - System documentation
-- `poitokun_mermaid.html`: Complete system flow diagram
+**obniz/** - ハードウェア連携
+- `index.html`: HC-SR04 超音波センサー連携、GAS へのデータ送信
 
-### Configuration Management
+**doc/** - ドキュメント
+- `poitokun_mermaid.html`: システムフロー図
 
-All settings centralized in [camera/config.py](camera/config.py) using environment variables:
+### 設定管理
 
-**Camera Settings**:
-- `CAMERA_DEVICE_ID`: Camera device selection (default: 0)
-- `IMAGE_WIDTH`, `IMAGE_HEIGHT`: Resolution (default: 1280x720)
-- `CAPTURE_INTERVAL_SECONDS`: Capture interval (default: 5)
-- `IMAGE_QUALITY`: JPEG quality 1-100 (default: 95)
+**カメラ設定** (`camera/config.py`):
+- `CAMERA_DEVICE_ID`, `IMAGE_WIDTH`, `IMAGE_HEIGHT`, `CAPTURE_INTERVAL_SECONDS` 等
 
-**AWS Settings** (loaded from `.env` file):
-- `AWS_REGION`: AWS region (default: ap-northeast-1)
-- `S3_BUCKET_NAME`: S3 bucket for image storage
-- `AWS_ACCESS_KEY_ID`: IAM user access key
-- `AWS_SECRET_ACCESS_KEY`: IAM user secret key
-- `MFA_SERIAL_NUMBER`: MFA device ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/DEVICE_NAME)
+**AWS設定** (`.env`):
+- `AWS_REGION`, `S3_BUCKET_NAME`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `MFA_SERIAL_NUMBER`
 
-**Security Note**: `.env` file contains actual credentials and is gitignored. Use `.env.example` as template.
+**OpenAI設定** (Lambda環境変数):
+- `OPENAI_API_KEY`: OpenAI API キー (**必須**)
 
-### AWS Integration Status
+### AWS 統合状況
 
-**Completed**:
-- S3 upload with MFA authentication
-- Lambda validation logic (local implementation)
-- Credential caching system
-- Environment-based configuration
+**完了**:
+- MFA付き S3 アップロード
+- Lambda ロジック (OpenAI 対応版) のローカル実装・テスト
+- クレデンシャルキャッシュシステム
 
-**Pending AWS Deployment**:
-- Lambda function deployment to AWS with updated code
-- S3 event trigger configuration
-- IAM role permission updates for Polly and S3 voice bucket
+**AWS デプロイ待ち**:
+- Lambda 関数の AWS へのデプロイ（`openai` ライブラリを含むレイヤーまたはパッケージが必要）
+- Lambda 環境変数 `OPENAI_API_KEY` の設定
+- S3 イベントトリガーの設定
 
-## AWS Polly Integration
+## OpenAI API 統合
 
-### Voice Synthesis Setup
+### 移行の背景
+AWS Rekognition では困難だった「ペットボトルのラベル剥がし忘れ」の判定や、「ゴミ箱の満杯検知」を実現するため、GPT-4o-mini に移行しました。
 
-The Lambda function now includes AWS Polly integration for generating voice feedback:
-
-**Configuration** ([lambda/polly_config.py](lambda/polly_config.py)):
-- Engine: `neural` (high-quality voice synthesis)
-- Voice ID: `Takumi` (Japanese male voice)
-- Output format: MP3 (24kHz sample rate)
-- Voice bucket: `wackathon-2025-voice-responses` (configurable via environment variable)
-
-**Audio File Naming**:
-- Format: `voice_response_YYYYMMDD_HHMMSS.mp3`
-- Storage: Separate S3 bucket for voice files
-
-### Lambda Deployment Steps
-
-1. **Create S3 Voice Bucket** (AWS Console or CLI):
-   ```bash
-   aws s3 mb s3://wackathon-2025-voice-responses --region ap-northeast-1
-   ```
-
-2. **Update Lambda IAM Role Permissions**:
-   Add the following policies to the Lambda execution role:
-   ```json
-   {
-     "Version": "2012-10-17",
-     "Statement": [
-       {
-         "Effect": "Allow",
-         "Action": [
-           "polly:SynthesizeSpeech"
-         ],
-         "Resource": "*"
-       },
-       {
-         "Effect": "Allow",
-         "Action": [
-           "s3:PutObject"
-         ],
-         "Resource": "arn:aws:s3:::wackathon-2025-voice-responses/*"
-       }
-     ]
-   }
-   ```
-
-3. **Upload Lambda Function**:
-   - Go to AWS Lambda Console
-   - Select `waste-recognition-function`
-   - Upload `lambda/waste_recognition.zip`
-   - Handler: `waste_validator.lambda_handler`
-
-4. **Set Environment Variables** (Lambda Console):
-   - Key: `VOICE_BUCKET_NAME`
-   - Value: `wackathon-2025-voice-responses`
-
-5. **Test the Function**:
-   - Upload test image to S3 images bucket
-   - Check CloudWatch Logs for:
-     - `[INFO] Polly音声合成開始`
-     - `[INFO] 音声合成完了`
-     - `[INFO] 音声URL生成完了`
-   - Verify audio file created in voice bucket
-
-### Response Format
-
-The Lambda function now returns audio URL in the response:
+### レスポンス形式
+Lambda は以下の形式で JSON を返します：
 
 ```json
 {
   "statusCode": 200,
   "body": {
     "is_valid": true,
-    "message": "ありがとうございます！プラスチックとして正しく分別されています。",
-    "audio_url": "https://wackathon-2025-voice-responses.s3.ap-northeast-1.amazonaws.com/voice_response_20251118_123456.mp3",
-    "detected_items": ["Bottle (89.1%)"],
-    "categories": ["プラスチック", "ペットボトル"],
-    "prohibited_items": []
+    "message": "ありがとうございます！...",
+    "audio_url": "https://...",
+    "detected_items": ["Plastic Bottle"],
+    "categories": ["ペットボトル"],
+    "prohibited_items": [],
+    "label_removed": true,
+    "is_full": false
   }
 }
 ```
 
-### Troubleshooting
-
-**Polly synthesis fails**:
-- Check IAM role has `polly:SynthesizeSpeech` permission
-- Verify VoiceId "Takumi" is available in ap-northeast-1 region
-- Check CloudWatch Logs for detailed error messages
-
-**S3 upload fails**:
-- Verify voice bucket exists: `aws s3 ls s3://wackathon-2025-voice-responses`
-- Check IAM role has `s3:PutObject` permission for voice bucket
-- Ensure bucket is in same region as Lambda (ap-northeast-1)
-
-**Audio URL returns null**:
-- Check CloudWatch Logs for Polly/S3 errors
-- Verify environment variable `VOICE_BUCKET_NAME` is set correctly
-- Function will continue to work even if voice generation fails (message text is still returned)
-
-### Common IAM Permission Errors
-
-**Error: AccessDenied - polly:SynthesizeSpeech**
-```
-User: arn:aws:sts::438632968703:assumed-role/WackathonLambdaRole/wackathon-waste-recognition
-is not authorized to perform: polly:SynthesizeSpeech
-```
-**Cause**: Lambda execution role (WackathonLambdaRole) lacks Polly permission
-**Solution**: Add `polly:SynthesizeSpeech` to WackathonLambdaRole (not user policy)
-
-**Error: AccessDenied - s3:PutObject on voice bucket**
-```
-is not authorized to perform: s3:PutObject on resource:
-"arn:aws:s3:::wackathon-2025-voice-responses/voice_response_*.mp3"
-```
-**Cause**: Lambda execution role lacks S3 voice bucket write permission
-**Solution**: Add `s3:PutObject` for `arn:aws:s3:::wackathon-2025-voice-responses/*` to WackathonLambdaRole
-
-**Important**: Lambda execution role and user IAM policy are separate. Lambda functions use the execution role, not user credentials.
-
-## IAM Permission Configuration
-
-### Lambda Execution Role (WackathonLambdaRole)
-Required permissions for Lambda function runtime:
-
-| Service | Action | Resource | Purpose |
-|---------|--------|----------|---------|
-| Rekognition | `DetectLabels` | `*` | Image recognition |
-| S3 | `GetObject` | `wackathon-2025-trash-images/*` | Read uploaded images |
-| Polly | `SynthesizeSpeech` | `*` | Generate voice responses |
-| S3 | `PutObject` | `wackathon-2025-voice-responses/*` | Save audio files |
-| CloudWatch Logs | `CreateLogGroup`, `CreateLogStream`, `PutLogEvents` | `*` | Logging |
-
-### IAM User Permissions
-Required permissions for manual operations (camera upload, Lambda deployment):
-
-| Operation | Action | Resource | Purpose |
-|-----------|--------|----------|---------|
-| Image upload | `s3:PutObject` | `wackathon-2025-trash-images/*` | Camera → S3 |
-| Lambda update | `lambda:UpdateFunctionCode` | Lambda function ARN | Deploy code |
-| IAM management | `iam:*` | Roles/Policies | Configure permissions |
-
-**Key Distinction**: User policies do NOT affect Lambda execution. Lambda uses its execution role exclusively.
-
-### Code Style
-- Type hints: Use `Final`, `Optional`, `list[Type]` for all parameters and returns
-- Import ordering: PEP 8 (standard library → third-party → local modules)
-- Docstrings: Google-style with Parameters and Returns sections
-- Constants: UPPERCASE with Final annotation
-- Naming: snake_case for variables/functions, PascalCase for classes
-- Error handling: Specific exceptions with clear error messages
+### コードスタイル
+- 型ヒント: `Final`, `Optional`, `list[Type]` 等を使用
+- インポート順序: 標準ライブラリ → サードパーティ → ローカル
+- Docstrings: Google スタイル
+- 言語: **日本語** (コメント、ドキュメント含む)

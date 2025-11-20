@@ -1,104 +1,133 @@
 """
-Lambda関数のローカルテストスクリプト
+ローカルテスト用スクリプト
 
-waste_validator.pyをローカル環境でテストします。
+AWS Lambda環境を模倣してwaste_validator.pyを実行します。
+OpenAI APIの呼び出しはモック化されます。
 """
 
 import json
 import sys
-from typing import Any
+from unittest.mock import MagicMock, patch
 
-from mock_data import ALL_TEST_CASES
-from waste_validator import lambda_handler
+# モジュールパスを追加
+sys.path.append(".")
 
+import waste_validator
 
-def print_result(test_name: str, result: dict[str, Any]) -> None:
-    """
-    テスト結果を見やすく表示
-
-    Parameters:
-        test_name: テストケース名
-        result: Lambda関数の実行結果
-    """
-    print(f"\n{'='*60}")
-    print(f"テストケース: {test_name}")
-    print(f"{'='*60}")
-
-    body = json.loads(result["body"])
-
-    print(f"判定結果: {'✅ OK' if body['is_valid'] else '❌ NG'}")
-    print(f"\n音声メッセージ:")
-    print(f"  {body['message']}")
-
-    if body["detected_items"]:
-        print(f"\n検出されたアイテム:")
-        for item in body["detected_items"]:
-            print(f"  - {item}")
-
-    if body["categories"]:
-        print(f"\n分類されたゴミ種別:")
-        for category in body["categories"]:
-            print(f"  - {category}")
-
-    if body["prohibited_items"]:
-        print(f"\n⚠️ 禁止アイテム:")
-        for item in body["prohibited_items"]:
-            print(f"  - {item}")
-
-    if "error" in body:
-        print(f"\n❌ エラー: {body['error']}")
-
-
-def run_all_tests() -> None:
-    """全てのテストケースを実行"""
-    print("Lambda関数ローカルテスト開始")
-    print("="*60)
-
-    passed = 0
-    failed = 0
-
-    for test_name, test_data in ALL_TEST_CASES.items():
-        try:
-            result = lambda_handler(test_data, None)
-            print_result(test_name, result)
-            passed += 1
-        except Exception as e:
-            print(f"\n❌ テスト '{test_name}' でエラー発生: {str(e)}")
-            failed += 1
-
-    # サマリー表示
-    print(f"\n{'='*60}")
-    print(f"テスト結果サマリー")
-    print(f"{'='*60}")
-    print(f"✅ 成功: {passed}")
-    print(f"❌ 失敗: {failed}")
-    print(f"合計: {passed + failed}")
+# テストケース定義
+TEST_CASES = [
+    {
+        "name": "正常系: ペットボトル（ラベルなし）",
+        "mock_response": {
+            "is_valid": True,
+            "message": "ありがとうございます！ペットボトルとして正しく分別されています。",
+            "detected_items": ["Plastic Bottle"],
+            "categories": ["ペットボトル"],
+            "prohibited_items": [],
+            "label_removed": True,
+            "is_full": False,
+        },
+    },
+    {
+        "name": "異常系: ペットボトル（ラベルあり）",
+        "mock_response": {
+            "is_valid": False,
+            "message": "ペットボトルのラベルを剥がしてください。",
+            "detected_items": ["Plastic Bottle"],
+            "categories": ["ペットボトル"],
+            "prohibited_items": [],
+            "label_removed": False,
+            "is_full": False,
+        },
+    },
+    {
+        "name": "異常系: 禁止物（電池）",
+        "mock_response": {
+            "is_valid": False,
+            "message": "電池は捨てられません。",
+            "detected_items": ["Battery"],
+            "categories": [],
+            "prohibited_items": ["Battery"],
+            "label_removed": False,
+            "is_full": False,
+        },
+    },
+    {
+        "name": "異常系: ゴミ箱満杯",
+        "mock_response": {
+            "is_valid": True,
+            "message": "ありがとうございます。ゴミ箱がいっぱいになってきました。",
+            "detected_items": ["Paper"],
+            "categories": ["燃えるゴミ"],
+            "prohibited_items": [],
+            "label_removed": False,
+            "is_full": True,
+        },
+    },
+]
 
 
-def run_single_test(test_name: str) -> None:
-    """
-    特定のテストケースを実行
+def run_tests():
+    print("=== ローカルテスト開始 ===")
 
-    Parameters:
-        test_name: テストケース名
-    """
-    if test_name not in ALL_TEST_CASES:
-        print(f"❌ テストケース '{test_name}' が見つかりません")
-        print(f"\n利用可能なテストケース:")
-        for name in ALL_TEST_CASES.keys():
-            print(f"  - {name}")
-        return
+    # モックの設定
+    with patch("waste_validator.s3") as mock_s3, patch(
+        "waste_validator.openai_client"
+    ) as mock_openai:
 
-    test_data = ALL_TEST_CASES[test_name]
-    result = lambda_handler(test_data, None)
-    print_result(test_name, result)
+        # S3のモック設定
+        mock_s3.get_object.return_value = {
+            "Body": MagicMock(read=lambda: b"dummy_image_data")
+        }
+        mock_s3.put_object.return_value = {}
+
+        # OpenAI TTSのモック設定
+        mock_openai.generate_speech.return_value = b"dummy_audio_data"
+
+        for i, case in enumerate(TEST_CASES):
+            print(f"\n--- Test Case {i+1}: {case['name']} ---")
+
+            # OpenAI Visionのモック設定
+            mock_openai.analyze_image.return_value = case["mock_response"]
+
+            # ダミーイベント
+            event = {
+                "Records": [
+                    {
+                        "s3": {
+                            "bucket": {"name": "test-bucket"},
+                            "object": {"key": "test.jpg"},
+                        }
+                    }
+                ]
+            }
+
+            # 実行
+            response = waste_validator.lambda_handler(event, None)
+            body = json.loads(response["body"])
+
+            # 検証
+            print(f"Status Code: {response['statusCode']}")
+            print(f"Is Valid: {body['is_valid']}")
+            print(f"Message: {body['message']}")
+            print(f"Audio URL: {body.get('audio_url')}")
+            
+            if "label_removed" in body:
+                print(f"Label Removed: {body['label_removed']}")
+            if "is_full" in body:
+                print(f"Is Full: {body['is_full']}")
+
+            # アサーション
+            expected = case["mock_response"]
+            if body["is_valid"] != expected["is_valid"]:
+                print(f"[FAIL] is_valid mismatch. Expected {expected['is_valid']}")
+            elif body["message"] != expected["message"]:
+                print(f"[FAIL] message mismatch.")
+            else:
+                print("[PASS]")
+
+    print("\n=== テスト完了 ===")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        # コマンドライン引数で指定されたテストケースを実行
-        test_name = sys.argv[1]
-        run_single_test(test_name)
-    else:
-        # 全テストケースを実行
-        run_all_tests()
+    run_tests()
