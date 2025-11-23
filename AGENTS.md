@@ -5,9 +5,11 @@
 既存ドキュメントの知見を尊重してください。
 
 ## プロジェクト概要
-- PC カメラで 5 秒ごとに撮影し、`camera/captured_images/` に保存。将来的に AWS S3 → Lambda → Rekognition → Polly へ連携する想定。
-- obniz 超音波センサーが計測値を Google Apps Script に送信し、システム全体のトリガーに利用。
-- 主要スクリプト: `camera/camera_capture.py`（ローカル保存）、`camera/config.py`（撮影設定・AWS 設定）、`obniz/index.html`（距離センサー連携）。
+## プロジェクト概要
+- **PCカメラ (iPhone連係)** で10秒ごとに撮影し、AWS S3へアップロード (`camera/camera_to_s3_mfa.py`)。
+- **AWS Lambda (GPT-4o-mini)** が画像を解析し、結果(JSON)をS3に保存。
+- **ローカルサーバー (`camera/app.py`)** がS3を監視し、**Voicevox** で音声を生成してMacで再生。
+- **将来構想**: OpenAI Realtime API を導入し、画像・音声を同時処理して「漫才のような双方向対話」を実現予定。
 
 ## 共通ルール
 1. 変更前に `README.md` と `CLAUDE.md` を確認し、既存の意図やスタイルを踏襲する。

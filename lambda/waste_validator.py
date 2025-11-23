@@ -105,7 +105,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
 def generate_audio_with_openai(message: str) -> Optional[str]:
     """
-    OpenAI TTSで音声を生成しS3に保存
+    OpenAI TTSで音声を生成しS3に保存（バックアップ用）
 
     Parameters:
         message: 音声化するテキストメッセージ
@@ -151,6 +151,37 @@ def generate_audio_with_openai(message: str) -> Optional[str]:
         return None
 
 
+def save_result_to_s3(result_data: dict[str, Any]) -> Optional[str]:
+    """
+    解析結果をJSONとしてS3に保存（ローカルのVoicevox連携用）
+
+    Parameters:
+        result_data: 保存するデータ
+
+    Returns:
+        保存したS3キー、失敗時はNone
+    """
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # images/xxx.jpg -> results/xxx.json のように対応付けるのが理想だが
+        # ここではシンプルにタイムスタンプで保存
+        json_key = f"results/result_{timestamp}.json"
+
+        print(f"[INFO] 解析結果をS3に保存: {VOICE_BUCKET_NAME}/{json_key}")
+        s3.put_object(
+            Bucket=VOICE_BUCKET_NAME,
+            Key=json_key,
+            Body=json.dumps(result_data, ensure_ascii=False),
+            ContentType="application/json",
+        )
+        return json_key
+
+    except Exception as e:
+        print(f"[ERROR] S3への結果保存失敗: {str(e)}")
+        print(f"[ERROR] Traceback:\n{traceback.format_exc()}")
+        return None
+
+
 def create_response(
     is_valid: bool,
     message: str,
@@ -160,39 +191,40 @@ def create_response(
     label_removed: bool = False,
     is_full: bool = False,
     error: Optional[str] = None,
+    skip_audio: bool = False,
 ) -> dict[str, Any]:
     """
-    Lambda関数のレスポンスを生成
-
-    Parameters:
-        is_valid: 分別が正しいかどうか
-        message: 音声で読み上げるメッセージ
-        detected_items: 検出されたアイテムのリスト
-        categories: 判定されたゴミ種別のリスト
-        prohibited_items: 検出された禁止アイテムのリスト
-        label_removed: ラベルが剥がされているか
-        is_full: ゴミ箱が満杯か
-        error: エラーメッセージ（エラー時のみ）
-
-    Returns:
-        JSON形式のレスポンス辞書
+    Lambda関数のレスポンスを生成し、結果をS3に保存
     """
-    # 音声生成
-    audio_url = generate_audio_with_openai(message)
+    import os
+    
+    # OpenAI TTSを使用するかどうか（環境変数で制御）
+    enable_openai_tts = os.environ.get("ENABLE_OPENAI_TTS", "false").lower() == "true"
+    audio_url = None
+
+    if enable_openai_tts and not skip_audio:
+        audio_url = generate_audio_with_openai(message)
 
     response_body = {
         "is_valid": is_valid,
         "message": message,
-        "audio_url": audio_url,
         "detected_items": detected_items,
         "categories": categories or [],
         "prohibited_items": prohibited_items or [],
         "label_removed": label_removed,
         "is_full": is_full,
+        "timestamp": datetime.now().isoformat(),
     }
+
+    if audio_url:
+        response_body["audio_url"] = audio_url
 
     if error:
         response_body["error"] = error
+
+    # Voicevox連携のためにS3にJSONを保存
+    # エラー時でもメッセージを表示するために保存する
+    save_result_to_s3(response_body)
 
     return {
         "statusCode": 200,

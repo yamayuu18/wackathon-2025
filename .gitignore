@@ -30,3 +30,6 @@ Thumbs.db
 # Lambda deployment artifacts
 lambda/package/
 lambda/waste_recognition.zip
+
+# Audio files
+*.wav

@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ポイっとくん Voice Player</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            text-align: center;
+            padding: 20px;
+            background-color: #f0f2f5;
+            color: #333;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            margin-bottom: 20px;
+            font-size: 24px;
+            color: #1a73e8;
+        }
+
+        #status {
+            margin: 20px 0;
+            padding: 15px;
+            background: #e8f0fe;
+            border-radius: 10px;
+            min-height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+
+        #message {
+            font-size: 18px;
+            margin: 20px 0;
+            min-height: 50px;
+        }
+
+        button {
+            background-color: #1a73e8;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 18px;
+            border-radius: 30px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            width: 100%;
+            max-width: 300px;
+        }
+
+        button:active {
+            background-color: #1557b0;
+            transform: scale(0.98);
+        }
+
+        .playing {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(26, 115, 232, 0.4);
+            }
+
+            70% {
+                box-shadow: 0 0 0 10px rgba(26, 115, 232, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(26, 115, 232, 0);
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🗑️ ポイっとくん Voice Player</h1>
+
+        <div id="status">
+            準備完了
+        </div>
+
+        <div id="message">
+            （ここにメッセージが表示されます）
+        </div>
+
+        <button id="playBtn" onclick="startListening()">再生を開始する</button>
+
+        <audio id="audioPlayer" style="display:none"></audio>
+    </div>
+
+    <script>
+        let lastAudioFile = null;
+        let isListening = false;
+        const audioPlayer = document.getElementById('audioPlayer');
+        const statusDiv = document.getElementById('status');
+        const messageDiv = document.getElementById('message');
+        const playBtn = document.getElementById('playBtn');
+
+        function startListening() {
+            if (isListening) return;
+
+            // iOSでの自動再生制限を解除するためのダミー再生
+            audioPlayer.play().catch(() => { });
+
+            isListening = true;
+            playBtn.textContent = "監視中...";
+            playBtn.style.backgroundColor = "#34a853";
+            statusDiv.textContent = "新しい音声を待っています...";
+
+            // ポーリング開始
+            setInterval(checkStatus, 1000);
+        }
+
+        async function checkStatus() {
+            if (!isListening) return;
+
+            try {
+                const response = await fetch('/status');
+                const data = await response.json();
+
+                if (data.audio_file && data.audio_file !== lastAudioFile) {
+                    console.log("New audio found:", data.audio_file);
+                    lastAudioFile = data.audio_file;
+
+                    // メッセージ更新
+                    messageDiv.textContent = data.message;
+                    statusDiv.textContent = "再生中...";
+                    statusDiv.classList.add('playing');
+
+                    // 音声再生
+                    // キャッシュを防ぐためにタイムスタンプを付与
+                    audioPlayer.src = `/audio/${data.audio_file}?t=${Date.now()}`;
+                    try {
+                        await audioPlayer.play();
+                    } catch (e) {
+                        console.error("Playback failed:", e);
+                        statusDiv.textContent = "再生エラー（画面をタップしてください）";
+                    }
+
+                    audioPlayer.onended = () => {
+                        statusDiv.textContent = "待機中...";
+                        statusDiv.classList.remove('playing');
+                    };
+                }
+            } catch (e) {
+                console.error("Polling error:", e);
+            }
+        }
+    </script>
+</body>
+
+</html>

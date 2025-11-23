@@ -354,10 +354,21 @@ def main() -> int:
             if not uploader.get_mfa_session_token(mfa_code):
                 return 1
 
-        # テスト実行（1回だけ撮影→アップロード）
-        success = uploader.run_once()
+        # 連続実行
+        import time
+        from config import CAPTURE_INTERVAL_SECONDS
 
-        return 0 if success else 1
+        print(f"\n🚀 連続撮影モードを開始します（間隔: {CAPTURE_INTERVAL_SECONDS}秒）")
+        print("   Ctrl+C で停止します")
+
+        while True:
+            success = uploader.run_once()
+            if not success:
+                print("⚠️ エラーが発生しましたが、実行を継続します...")
+            
+            time.sleep(CAPTURE_INTERVAL_SECONDS)
+
+        return 0
 
     except KeyboardInterrupt:
         print("\n\n⚠️ ユーザーによって中断されました")
