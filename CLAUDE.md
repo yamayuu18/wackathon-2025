@@ -65,6 +65,11 @@ Wackathon 2025 向けの「感情を持ったゴミ箱システム」です。Op
 - キャラクター: ずんだもん (Speaker ID: 3)
 - **バックアップ**: `ENABLE_OPENAI_TTS=true` で OpenAI TTS も利用可能
 
+**データベース (Local SQLite)**:
+- ファイル: `camera/waste_data.db`
+- テーブル: `disposal_history`
+- 内容: タイムスタンプ、判定結果、検出アイテム、メッセージ
+
 ### 主要コンポーネント
 
 **camera/** - ローカル実行用スクリプト

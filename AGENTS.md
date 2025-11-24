@@ -9,6 +9,7 @@
 - **PCカメラ (iPhone連係)** で10秒ごとに撮影し、AWS S3へアップロード (`camera/camera_to_s3_mfa.py`)。
 - **AWS Lambda (GPT-4o-mini)** が画像を解析し、結果(JSON)をS3に保存。
 - **ローカルサーバー (`camera/app.py`)** がS3を監視し、**Voicevox** で音声を生成してMacで再生。
+- **ローカルDB (`camera/database.py`)** がゴミ捨て履歴をSQLiteに保存。
 - **将来構想**: OpenAI Realtime API を導入し、画像・音声を同時処理して「漫才のような双方向対話」を実現予定。
 
 ## 共通ルール
