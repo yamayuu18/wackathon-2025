@@ -11,6 +11,7 @@ import boto3
 from dotenv import load_dotenv
 
 from voicevox_client import VoicevoxClient
+from database import Database
 
 # 設定読み込み
 load_dotenv()
@@ -70,6 +71,9 @@ def poll_s3_results():
     print("🚀 S3監視スレッドを開始しました")
     s3_client = None
 
+    # DB初期化
+    db = Database()
+    
     while True:
         try:
             # クライアントがない、または再生成が必要な場合
@@ -116,8 +120,16 @@ def poll_s3_results():
                 obj = s3_client.get_object(Bucket=VOICE_BUCKET_NAME, Key=key)
                 data = json.loads(obj["Body"].read().decode("utf-8"))
                 
+                # DBに記録
+                try:
+                    # S3キーから画像パスを推測（簡易的）
+                    # 実際にはLambdaの結果に画像パスを含めるのがベストだが、今はキーを記録
+                    db.insert_record(image_path=key, result_json=data)
+                except Exception as e:
+                    print(f"⚠️ DB保存エラー: {e}")
+
                 message = data.get("message", "")
-                timestamp = data.get("timestamp", "")
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 if message:
                     print(f"🗣️ 音声生成開始: {message}")

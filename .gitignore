@@ -33,3 +33,6 @@ lambda/waste_recognition.zip
 
 # Audio files
 *.wav
+
+# Database
+*.db
