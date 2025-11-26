@@ -1,48 +1,94 @@
 # システム構成図 (System Architecture)
 
+## 概要
+iPhoneの**フラッシュ**や**0.5倍ズーム**を活用するため、Webアプリ形式で実装されています。
+iPhoneのSafariからアクセスし、Mac上のサーバーを経由してOpenAIのRealtime APIと通信します。
+
+## コンポーネント図
+
 ```mermaid
 graph TD
-    subgraph local["ローカル環境 (Mac & iPhone)"]
-        iPhone_Cam["iPhone (連係カメラ)"] -->|映像入力| Script_Camera[camera_to_s3_mfa.py]
+    subgraph Client ["クライアント (iPhone / ユーザー)"]
+        Browser["Safari ブラウザ"]
+        Camera["カメラ (背面/広角)"]
+        Mic["マイク"]
+        Speaker["スピーカー"]
+        Flash["フラッシュ/ライト"]
         
-        subgraph mac[Mac]
-            Script_Camera -->|画像保存| Local_Images[("captured_images/")]
-            Script_Camera -->|MFA認証 & アップロード| S3_Images
-            
-            Script_App["app.py (Flask Server)"] -->|ポーリング 1s| S3_Results
-            Script_App -->|音声合成リクエスト| Voicevox["Voicevox Engine"]
-            Voicevox -->|WAVデータ| Script_App
-            Script_App -->|再生 afplay| Mac_Speaker["Mac スピーカー"]
-        end
+        Browser -->|制御| Camera
+        Browser -->|制御| Flash
+        Camera -->|映像ストリーム| Browser
+        Mic -->|音声ストリーム| Browser
+    end
+
+    subgraph Tunnel ["通信トンネル"]
+        Ngrok["ngrok (HTTPS/WSS)"]
+    end
+
+    subgraph Server ["サーバー (Mac Localhost)"]
+        FastAPI["server.py (FastAPI)"]
+        FileSystem["ローカル保存 (画像)"]
+        SQLite[("SQLite データベース")]
         
-        iPhone_Browser["iPhone (Safari)"] -.->|ステータス確認 Optional| Script_App
+        FastAPI -->|保存| FileSystem
+        FastAPI -->|記録| SQLite
     end
 
-    subgraph aws[AWS Cloud]
-        S3_Images["S3 Bucket\n(Images)"] -->|Event Trigger| Lambda["Lambda Function\n(waste_validator)"]
-        Lambda -->|解析結果 JSON| S3_Results["S3 Bucket\n(Results)"]
+    subgraph Cloud ["クラウド (OpenAI)"]
+        RealtimeAPI["Realtime API (GPT-4o mini)"]
     end
 
-    subgraph api[外部 API]
-        Lambda -->|画像解析 Vision| OpenAI["OpenAI API\n(GPT-4o-mini)"]
-    end
+    %% データフロー
+    Browser <-->|"WebSocket (音声/画像/イベント)"| Ngrok
+    Ngrok <-->|WebSocket| FastAPI
+    FastAPI <-->|"WebSocket (リレー)"| RealtimeAPI
 
-    %% Styling
-    style local fill:#e6f3ff,stroke:#333,stroke-width:2px
-    style aws fill:#fff0e6,stroke:#333,stroke-width:2px
-    style api fill:#e6ffe6,stroke:#333,stroke-width:2px
-    
-    style Script_Camera fill:#ff9999,stroke:#333,color:black
-    style Script_App fill:#99ccff,stroke:#333,color:black
-    style Lambda fill:#ffcc99,stroke:#333,color:black
+    %% 詳細なやり取り
+    Browser -- "1. 音声・画像送信" --> FastAPI
+    FastAPI -- "2. リレー送信" --> RealtimeAPI
+    RealtimeAPI -- "3. 音声応答" --> FastAPI
+    FastAPI -- "4. 音声リレー" --> Browser
+    Browser -->|再生| Speaker
+
+    %% Function Calling
+    RealtimeAPI -- "5. 関数呼び出し (log_disposal)" --> FastAPI
+    FastAPI -- "6. DB記録" --> SQLite
 ```
 
-## 処理フロー詳細
+## 主要コンポーネント
 
-1.  **画像取得**: `camera_to_s3_mfa.py` がiPhoneの連係カメラを使用してx秒ごとに写真を撮影。
-2.  **アップロード**: 撮影した画像を AWS S3 (`wackathon-2025-trash-images`) にアップロード。
-3.  **解析実行**: S3へのアップロードをトリガーに Lambda が起動。OpenAI API で画像を解析。
-4.  **結果保存**: Lambda が解析結果（メッセージ、判定など）を JSON ファイルとして S3 (`wackathon-2025-voice-responses/results/`) に保存。
-5.  **結果検知**: `app.py` が S3 を監視しており、新しい JSON ファイルを見つけるとダウンロード。
-6.  **音声生成**: `app.py` がローカルの Voicevox にテキストを送り、音声データ (WAV) を生成。
-7.  **音声再生**: 生成された音声を Mac のスピーカーから再生 (`afplay`)。
+1.  **フロントエンド (iPhone/Safari)**
+    *   **ファイル**: `index.html`
+    *   **役割**: カメラ映像・音声の取得、ハードウェア制御（フラッシュ、ズーム）、ユーザーインターフェース。
+    *   **通信**: ngrokが提供するHTTPS経由でバックエンドとWebSocket通信を行います。
+
+2.  **バックエンド (Mac)**
+    *   **ファイル**: `server.py`
+    *   **役割**: リレーサーバーとして機能。iPhoneからのメディアを受け取り、検証用に画像を保存し、OpenAIへ転送します。また、OpenAIからの応答をiPhoneへ返します。
+    *   **フレームワーク**: FastAPI + Uvicorn
+
+3.  **AIエンジン (OpenAI)**
+    *   **サービス**: OpenAI Realtime API (Beta)
+    *   **役割**: 音声と画像を解析し、音声応答を生成します。「ペットボトル検査官」として、厳しい基準（キャップ・ラベル・異物なし）で判定を行います。
+
+4.  **データベース**
+    *   **ファイル**: `camera/database.py` / `waste_data.db`
+    *   **役割**: 廃棄の記録を保存します。判定結果（`is_valid`）や拒否理由（`rejection_reason`）を記録します。
+
+## データフロー
+
+1.  **初期化**: ユーザーがWebアプリを開くと、即座にカメラが起動します。
+2.  **接続**: 「接続開始」ボタンでWebSocketセッションが確立されます。
+3.  **ストリーミング**:
+    *   **音声**: 双方向でリアルタイムにストリーミングされます。
+    *   **画像**: 定期的（20秒ごと）またはイベントに応じてサーバーへ送信されます。
+4.  **処理**:
+    *   サーバーは画像を `camera/captured_images/` に保存します。
+    *   サーバーは画像と音声をOpenAIへ転送します。
+5.  **推論**:
+    *   OpenAIは「厳格なペットボトル検査官」のプロンプトに基づいて入力を解析します。
+    *   キャップ、ラベル、中身の有無などをステップバイステップで確認します。
+6.  **アクション**:
+    *   廃棄イベントを検知すると、OpenAIは `log_disposal` 関数を呼び出します。
+    *   サーバーは結果をSQLiteに記録します。
+    *   OpenAIは音声応答（例：「ラベル剥がしてや！」）を生成し、ユーザーに返します。

@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ポイっとくん WebApp</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #000;
+            color: #fff;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #controls {
+            padding: 20px;
+            padding-top: env(safe-area-inset-top, 20px);
+            /* iPhoneのノッチ対策 */
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            border-bottom-left-radius: 20px;
+            border-bottom-right-radius: 20px;
+            z-index: 10;
+            /* ビデオの上に表示 */
+        }
+
+        #video-container {
+            flex: 1;
+            position: relative;
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-top: -20px;
+            /* 角丸の隙間を埋める */
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .row {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        button {
+            flex: 1;
+            padding: 15px;
+            border: none;
+            border-radius: 12px;
+            background: #333;
+            color: #fff;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.2s;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        button:active {
+            background: #555;
+        }
+
+        button.active {
+            background: #FFCC00;
+            /* フラッシュON時は黄色 */
+            color: #000;
+        }
+
+        button.recording {
+            background: #FF3B30;
+        }
+
+        select {
+            flex: 1;
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 16px;
+            background: #333;
+            color: white;
+            border: 1px solid #555;
+        }
+
+        #status {
+            text-align: center;
+            font-size: 14px;
+            color: #888;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="controls">
+        <div id="status">未接続</div>
+
+        <div class="row">
+            <select id="camera-select">
+                <option value="">カメラを選択...</option>
+            </select>
+        </div>
+
+        <div class="row">
+            <button id="connect-btn">接続開始</button>
+            <button id="flash-btn" disabled>⚡ Flash</button>
+        </div>
+    </div>
+
+    <div id="video-container">
+        <video id="video" autoplay playsinline muted></video>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const cameraSelect = document.getElementById('camera-select');
+        const connectBtn = document.getElementById('connect-btn');
+        const flashBtn = document.getElementById('flash-btn');
+        const statusDiv = document.getElementById('status');
+
+        let stream = null;
+        let ws = null;
+        let audioContext = null;
+        let audioWorkletNode = null;
+        let track = null; // Video track for flash control
+
+        // カメラ一覧取得
+        async function getCameras() {
+            try {
+                // 権限リクエスト
+                await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+
+                cameraSelect.innerHTML = '<option value="">カメラを選択...</option>';
+                videoDevices.forEach(device => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `Camera ${cameraSelect.length}`;
+                    cameraSelect.appendChild(option);
+                });
+
+                // 背面カメラ（広角）を優先的に選択
+                const backCamera = videoDevices.find(d => d.label.toLowerCase().includes('back') || d.label.toLowerCase().includes('背面'));
+                if (backCamera) {
+                    cameraSelect.value = backCamera.deviceId;
+                }
+
+                // 初期化時にカメラを起動
+                await startCamera(cameraSelect.value);
+
+            } catch (err) {
+                console.error('Error getting cameras:', err);
+                statusDiv.textContent = 'カメラ権限エラー: ' + err.message;
+            }
+        }
+
+        // カメラ切り替えイベント
+        cameraSelect.onchange = async () => {
+            await startCamera(cameraSelect.value);
+        };
+
+        // カメラ起動
+        async function startCamera(deviceId) {
+            if (stream) {
+                stream.getTracks().forEach(t => t.stop());
+            }
+
+            const constraints = {
+                video: {
+                    deviceId: deviceId ? { exact: deviceId } : undefined,
+                    facingMode: deviceId ? undefined : 'environment', // デフォルトは背面
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 },
+                    advanced: [{ torch: false }] // 初期化時に明示的にOFF
+                },
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    sampleRate: 24000 // Realtime API 推奨
+                }
+            };
+
+            try {
+                stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+                track = stream.getVideoTracks()[0];
+
+                // フラッシュ機能の確認
+                const capabilities = track.getCapabilities();
+                console.log("Camera Capabilities:", capabilities);
+
+                // torch または fillLightMode をチェック
+                if (capabilities.torch || capabilities.fillLightMode) {
+                    flashBtn.disabled = false;
+                    statusDiv.textContent = 'フラッシュ使用可能';
+                } else {
+                    flashBtn.disabled = true;
+                    statusDiv.textContent = 'このカメラはフラッシュ非対応です';
+                }
+
+                return stream;
+            } catch (err) {
+                console.error('Error starting camera:', err);
+                statusDiv.textContent = 'カメラ起動エラー: ' + err.message;
+                return null;
+            }
+        }
+
+        // フラッシュ制御
+        let isFlashOn = false;
+        flashBtn.onclick = async () => {
+            if (!track) return;
+
+            isFlashOn = !isFlashOn;
+            try {
+                // 一般的な torch プロパティ
+                await track.applyConstraints({
+                    advanced: [{ torch: isFlashOn }]
+                });
+                flashBtn.classList.toggle('active', isFlashOn);
+            } catch (err) {
+                console.error('Torch error:', err);
+                // フォールバック: fillLightMode (一部のAndroidなど)
+                try {
+                    await track.applyConstraints({
+                        advanced: [{ fillLightMode: isFlashOn ? "flash" : "off" }]
+                    });
+                    flashBtn.classList.toggle('active', isFlashOn);
+                } catch (err2) {
+                    console.error('FillLightMode error:', err2);
+                    statusDiv.textContent = 'フラッシュ制御エラー: ' + err.message;
+                    isFlashOn = !isFlashOn; // 失敗したら状態を戻す
+                }
+            }
+        };
+
+        // 接続処理
+        connectBtn.onclick = async () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+                connectBtn.textContent = '接続開始';
+                connectBtn.classList.remove('recording');
+                return;
+            }
+
+            // 既にカメラが起動していない場合は起動 (念のため)
+            if (!stream || !stream.active) {
+                const deviceId = cameraSelect.value;
+                await startCamera(deviceId);
+            }
+
+            if (!stream) return;
+
+            // WebSocket接続
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+            ws.onopen = async () => {
+                statusDiv.textContent = '接続完了';
+                connectBtn.textContent = '切断';
+                connectBtn.classList.add('recording');
+
+                // 音声処理開始
+                await startAudioProcessing(stream);
+
+                // 画像送信ループ開始 (20秒間隔)
+                startImageLoop();
+            };
+
+            ws.onmessage = async (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'response.audio.delta') {
+                    playAudio(data.delta);
+                }
+            };
+
+            ws.onclose = () => {
+                statusDiv.textContent = '切断されました';
+                connectBtn.textContent = '接続開始';
+                connectBtn.classList.remove('recording');
+                stopAudioProcessing();
+            };
+        };
+
+        // 画像送信ループ
+        async function startImageLoop() {
+            while (ws && ws.readyState === WebSocket.OPEN) {
+                sendImage();
+                await new Promise(r => setTimeout(r, 20000)); // 20秒待機
+            }
+        }
+
+        function sendImage() {
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0);
+
+            // JPEG Base64変換
+            const base64 = canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
+
+            const event = {
+                type: "conversation.item.create",
+                item: {
+                    type: "message",
+                    role: "user",
+                    content: [
+                        {
+                            type: "input_image",
+                            image_url: `data:image/jpeg;base64,${base64}`
+                        }
+                    ]
+                }
+            };
+            ws.send(JSON.stringify(event));
+
+            // レスポンス要求
+            ws.send(JSON.stringify({ type: "response.create" }));
+            console.log("Image sent");
+        }
+
+        // 音声処理 (AudioWorklet)
+        async function startAudioProcessing(stream) {
+            audioContext = new AudioContext({ sampleRate: 24000 });
+            await audioContext.audioWorklet.addModule(URL.createObjectURL(new Blob([`
+                class AudioProcessor extends AudioWorkletProcessor {
+                    process(inputs, outputs, parameters) {
+                        const input = inputs[0];
+                        if (input.length > 0) {
+                            const float32Data = input[0];
+                            const int16Data = new Int16Array(float32Data.length);
+                            for (let i = 0; i < float32Data.length; i++) {
+                                const s = Math.max(-1, Math.min(1, float32Data[i]));
+                                int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                            }
+                            this.port.postMessage(int16Data.buffer);
+                        }
+                        return true;
+                    }
+                }
+                registerProcessor('audio-processor', AudioProcessor);
+            `], { type: 'application/javascript' })));
+
+            const source = audioContext.createMediaStreamSource(stream);
+            audioWorkletNode = new AudioWorkletNode(audioContext, 'audio-processor');
+
+            audioWorkletNode.port.onmessage = (event) => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    // Base64エンコードして送信
+                    const base64Audio = arrayBufferToBase64(event.data);
+                    ws.send(JSON.stringify({
+                        type: "input_audio_buffer.append",
+                        audio: base64Audio
+                    }));
+                }
+            };
+
+            source.connect(audioWorkletNode);
+            audioWorkletNode.connect(audioContext.destination); // モニター用（必要なければ削除）
+        }
+
+        function stopAudioProcessing() {
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+        }
+
+        // 音声再生
+        let nextStartTime = 0;
+        function playAudio(base64Delta) {
+            if (!audioContext) return;
+
+            const binaryString = window.atob(base64Delta);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            const int16Data = new Int16Array(bytes.buffer);
+            const float32Data = new Float32Array(int16Data.length);
+            for (let i = 0; i < int16Data.length; i++) {
+                float32Data[i] = int16Data[i] / 32768.0;
+            }
+
+            const buffer = audioContext.createBuffer(1, float32Data.length, 24000);
+            buffer.getChannelData(0).set(float32Data);
+
+            const source = audioContext.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioContext.destination);
+
+            if (nextStartTime < audioContext.currentTime) {
+                nextStartTime = audioContext.currentTime;
+            }
+            source.start(nextStartTime);
+            nextStartTime += buffer.duration;
+        }
+
+        function arrayBufferToBase64(buffer) {
+            let binary = '';
+            const bytes = new Uint8Array(buffer);
+            const len = bytes.byteLength;
+            for (let i = 0; i < len; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return window.btoa(binary);
+        }
+
+        // 初期化
+        getCameras();
+    </script>
+</body>
+
+</html>

@@ -6,11 +6,12 @@
 
 ## プロジェクト概要
 ## プロジェクト概要
-- **PCカメラ (iPhone連係)** で10秒ごとに撮影し、AWS S3へアップロード (`camera/camera_to_s3_mfa.py`)。
-- **AWS Lambda (GPT-4o-mini)** が画像を解析し、結果(JSON)をS3に保存。
-- **ローカルサーバー (`camera/app.py`)** がS3を監視し、**Voicevox** で音声を生成してMacで再生。
-- **ローカルDB (`camera/database.py`)** がゴミ捨て履歴をSQLiteに保存。
-- **将来構想**: OpenAI Realtime API を導入し、画像・音声を同時処理して「漫才のような双方向対話」を実現予定。
+- **Webアプリ版 (Current)**: iPhone (Safari) からアクセスし、カメラ(Flash/0.5x)とマイクを制御。
+- **Realtime API (GPT-4o-mini)**: 画像・音声をリアルタイムに解析し、音声応答を生成。
+- **厳格な判定**: ペットボトルのキャップ・ラベル・中身を厳しくチェック。
+- **ローカルサーバー (`camera/webapp/server.py`)**: FastAPI + WebSocket リレー。
+- **ローカルDB (`camera/database.py`)**: `waste_data.db` に判定結果と拒否理由を記録。
+- **Legacy**: S3/Lambda構成は `legacy/` に移動。
 
 ## 共通ルール
 1. 変更前に `README.md` と `CLAUDE.md` を確認し、既存の意図やスタイルを踏襲する。
@@ -18,6 +19,7 @@
 3. 開発中は `pip install -r requirements.txt` で依存関係を揃え、`cd camera && python camera_capture.py` で挙動確認する。
 4. AWS 連携は未実装。仮想コードや資格情報はダミー値で書かず、コメントで TODO 管理する。
 5. 機密データ（画像、AWS キー等）はリポジトリに含めない。環境変数または `.env` の利用を明示する。
+6. **【重要】指示の厳守**: ユーザーから明示的な指示がない限り、たとえ良かれと思っても機能の追加や変更を勝手に行わない。「提案」と「実装」を明確に分け、実装前に必ず許可を得る。
 
 ## エージェント構成と責務
 
@@ -46,6 +48,6 @@
 ## 補足リソース
 - `README.md`: 全体像、セットアップ手順、AWS 連携 TODO。
 - `CLAUDE.md`: **技術的な詳細はこちら**。コードスタイル、アーキテクチャ、デプロイ手順、テスト方法など。
-- `doc/poitokun_mermaid.html`: システム構成図。AWS サービス間の連携を把握する際に参照。
+- `doc/system_architecture.md`: システム構成図。AWS サービス間の連携を把握する際に参照。
 
 全エージェントは上記方針を守り、進捗や問題点を日本語で明確に共有してください。

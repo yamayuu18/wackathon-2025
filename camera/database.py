@@ -23,16 +23,26 @@ class Database:
                     image_path TEXT,
                     detected_items TEXT,
                     is_valid BOOLEAN,
+                    rejection_reason TEXT,
                     message TEXT,
                     raw_json TEXT
                 )
             """)
+            
+            # カラム追加のマイグレーション（既存DBへの対応）
+            try:
+                cursor.execute("ALTER TABLE disposal_history ADD COLUMN rejection_reason TEXT")
+            except sqlite3.OperationalError:
+                # カラムが既に存在する場合は無視
+                pass
+                
             conn.commit()
 
     def insert_record(self, 
                       image_path: str, 
                       result_json: Dict[str, Any], 
-                      user_id: Optional[str] = None):
+                      user_id: Optional[str] = None,
+                      rejection_reason: Optional[str] = None):
         """Insert a new disposal record."""
         
         # Extract relevant fields from the result JSON
@@ -45,9 +55,9 @@ class Database:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO disposal_history 
-                (user_id, image_path, detected_items, is_valid, message, raw_json)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (user_id, image_path, detected_items, is_valid, message, raw_json_str))
+                (user_id, image_path, detected_items, is_valid, rejection_reason, message, raw_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (user_id, image_path, detected_items, is_valid, rejection_reason, message, raw_json_str))
             conn.commit()
             print(f"✅ DBに記録しました: ID={cursor.lastrowid}")
 
