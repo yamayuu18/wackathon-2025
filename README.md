@@ -18,7 +18,7 @@ PCカメラでゴミを認識し、OpenAI API (GPT-4o-mini) を活用して分�
 3.  **ローカルサーバー (Mac)**:
     - **FastAPI**: WebSocketリレーサーバー。
     - **OpenAI Realtime API**: 画像・音声を解析し、音声応答を生成 (`gpt-4o-mini`)。
-    - **SQLite DB**: `waste_data.db` に判定結果と拒否理由を記録。
+    - **AWS DynamoDB**: 判定結果と拒否理由をクラウドに記録。
 4.  **厳格な判定ロジック**:
     - **OK**: 綺麗に洗ってラベル・キャップを外したペットボトル。
     - **NG**: それ以外（キャップ付き、ラベル付き、中身あり、缶・ビンなど）。
@@ -32,7 +32,7 @@ Wackathon/2025/
 │   │   ├── server.py           # FastAPIサーバー
 │   │   └── index.html          # フロントエンド
 │   ├── realtime_app.py         # Realtime API クライアント (CLI版)
-│   ├── database.py             # DB操作 (waste_data.db)
+│   ├── database.py             # DB操作 (DynamoDB)
 │   └── captured_images/        # 画像保存先
 ├── legacy/                     # 旧アーキテクチャ (S3/Lambda)
 │   ├── camera/                 # 旧カメラ・Voicevoxスクリプト
@@ -59,7 +59,12 @@ pip install -r requirements.txt
 
 ```ini
 OPENAI_API_KEY=sk-...
+OPENAI_API_KEY=sk-...
 REALTIME_MODEL=gpt-4o-mini-realtime-preview
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_DEFAULT_REGION=ap-northeast-1
+DYNAMODB_TABLE_NAME=waste_disposal_history
 ```
 
 ### 3. サーバー起動

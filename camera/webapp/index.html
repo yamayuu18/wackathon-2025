@@ -46,7 +46,8 @@
         video {
             width: 100%;
             height: 100%;
-            object-fit: cover;
+            object-fit: contain;
+            /* 全体を表示（クロップしない） */
         }
 
         .row {
@@ -180,8 +181,7 @@
                 video: {
                     deviceId: deviceId ? { exact: deviceId } : undefined,
                     facingMode: deviceId ? undefined : 'environment', // デフォルトは背面
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 },
+                    // width/heightを指定しないことで、カメラのネイティブアスペクト比（4:3など）を使用
                     advanced: [{ torch: false }] // 初期化時に明示的にOFF
                 },
                 audio: {
@@ -274,8 +274,8 @@
                 // 音声処理開始
                 await startAudioProcessing(stream);
 
-                // 画像送信ループ開始 (20秒間隔)
-                startImageLoop();
+                // 画像送信ループ開始 (30秒間隔)
+                startImageLoop(ws);
             };
 
             ws.onmessage = async (event) => {
@@ -294,11 +294,13 @@
         };
 
         // 画像送信ループ
-        async function startImageLoop() {
-            while (ws && ws.readyState === WebSocket.OPEN) {
+        async function startImageLoop(socket) {
+            console.log("Image loop started");
+            while (socket && socket.readyState === WebSocket.OPEN) {
                 sendImage();
-                await new Promise(r => setTimeout(r, 20000)); // 20秒待機
+                await new Promise(r => setTimeout(r, 30000)); // 30秒待機
             }
+            console.log("Image loop stopped");
         }
 
         function sendImage() {

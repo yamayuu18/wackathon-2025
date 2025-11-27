@@ -44,10 +44,10 @@
     - キャップ・ラベル・中身がある場合はNG
     - 缶・ビン・燃えるゴミはNG
 
-**データベース (Local SQLite)**:
-- ファイル: `camera/waste_data.db`
-- テーブル: `disposal_history`
-- カラム: `rejection_reason` (NG理由) を含む
+**データベース (AWS DynamoDB)**:
+- サービス: AWS DynamoDB
+- テーブル名: `waste_disposal_history` (環境変数で指定可)
+- 構成: Partition Key=`user_id`, Sort Key=`timestamp`
 
 ### 主要コンポーネント
 
@@ -64,7 +64,7 @@
 - `lambda/`: 旧Lambda関数
 
 ### 設定管理
-- `.env`: `OPENAI_API_KEY`, `REALTIME_MODEL`
+- `.env`: `OPENAI_API_KEY`, `REALTIME_MODEL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `DYNAMODB_TABLE_NAME`
 
 ## ハードウェアセットアップ (ゴミ箱内部)
 - **iPhone**: ゴミ箱の蓋の裏側に設置（背面カメラ使用）

@@ -1,79 +1,80 @@
-import sqlite3
+import boto3
 import json
-from pathlib import Path
+import os
+import time
 from datetime import datetime
 from typing import Optional, Dict, Any
+from decimal import Decimal
 
-DB_PATH = Path(__file__).parent / "waste_data.db"
+# .env loading is handled in server.py, but for standalone test we might need it.
+# Assuming server.py loads .env before importing or using this class.
 
 class Database:
-    def __init__(self, db_path: Path = DB_PATH):
-        self.db_path = db_path
-        self._init_db()
-
-    def _init_db(self):
-        """Initialize the database schema."""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS disposal_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    user_id TEXT,
-                    image_path TEXT,
-                    detected_items TEXT,
-                    is_valid BOOLEAN,
-                    rejection_reason TEXT,
-                    message TEXT,
-                    raw_json TEXT
-                )
-            """)
-            
-            # カラム追加のマイグレーション（既存DBへの対応）
-            try:
-                cursor.execute("ALTER TABLE disposal_history ADD COLUMN rejection_reason TEXT")
-            except sqlite3.OperationalError:
-                # カラムが既に存在する場合は無視
-                pass
-                
-            conn.commit()
+    def __init__(self):
+        self.region_name = os.getenv("AWS_DEFAULT_REGION", "ap-northeast-1")
+        self.table_name = os.getenv("DYNAMODB_TABLE_NAME", "waste_disposal_history")
+        
+        # Initialize DynamoDB resource
+        self.dynamodb = boto3.resource('dynamodb', region_name=self.region_name)
+        self.table = self.dynamodb.Table(self.table_name)
+        
+        print(f"Database initialized: DynamoDB Table '{self.table_name}' in '{self.region_name}'")
 
     def insert_record(self, 
                       image_path: str, 
                       result_json: Dict[str, Any], 
-                      user_id: Optional[str] = None,
+                      user_id: Optional[str] = "webapp_user",
                       rejection_reason: Optional[str] = None):
-        """Insert a new disposal record."""
+        """Insert a new disposal record into DynamoDB."""
         
-        # Extract relevant fields from the result JSON
+        # Extract relevant fields
         is_valid = result_json.get("is_valid", False)
         message = result_json.get("message", "")
-        detected_items = json.dumps(result_json.get("detected_items", []), ensure_ascii=False)
-        raw_json_str = json.dumps(result_json, ensure_ascii=False)
+        detected_items = result_json.get("detected_items", [])
+        
+        # Timestamp for Sort Key
+        timestamp = datetime.now().isoformat()
+        
+        item = {
+            'user_id': user_id,              # Partition Key
+            'timestamp': timestamp,          # Sort Key
+            'image_path': image_path,
+            'detected_items': detected_items,
+            'is_valid': is_valid,
+            'rejection_reason': rejection_reason,
+            'message': message,
+            'raw_json': json.dumps(result_json, ensure_ascii=False)
+        }
+        
+        # Remove None values (DynamoDB doesn't like them sometimes, or optional)
+        # Actually boto3 handles None as NULL, but empty strings are not allowed in some cases.
+        # Let's clean up.
+        item = {k: v for k, v in item.items() if v is not None}
 
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO disposal_history 
-                (user_id, image_path, detected_items, is_valid, rejection_reason, message, raw_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (user_id, image_path, detected_items, is_valid, rejection_reason, message, raw_json_str))
-            conn.commit()
-            print(f"✅ DBに記録しました: ID={cursor.lastrowid}")
+        try:
+            self.table.put_item(Item=item)
+            print(f"✅ DynamoDBに記録しました: {user_id} - {timestamp}")
+        except Exception as e:
+            print(f"❌ DynamoDB保存エラー: {e}")
 
-    def get_recent_records(self, limit: int = 10):
-        """Fetch recent records."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT * FROM disposal_history 
-                ORDER BY timestamp DESC 
-                LIMIT ?
-            """, (limit,))
-            return [dict(row) for row in cursor.fetchall()]
+    def get_recent_records(self, user_id: str = "webapp_user", limit: int = 10):
+        """Fetch recent records for a user."""
+        try:
+            response = self.table.query(
+                KeyConditionExpression=boto3.dynamodb.conditions.Key('user_id').eq(user_id),
+                ScanIndexForward=False, # Descending order
+                Limit=limit
+            )
+            return response.get('Items', [])
+        except Exception as e:
+            print(f"❌ DynamoDB取得エラー: {e}")
+            return []
 
 if __name__ == "__main__":
     # Simple test
-    db = Database()
-    print(f"Database initialized at {db.db_path}")
+    # Note: Requires AWS credentials to be set in environment
+    try:
+        db = Database()
+        print("DynamoDB connection initialized.")
+    except Exception as e:
+        print(f"Initialization failed: {e}")

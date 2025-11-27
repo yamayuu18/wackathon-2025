@@ -8,7 +8,7 @@ iPhoneのSafariからアクセスし、Mac上のサーバーを経由してOpenA
 
 ```mermaid
 graph TD
-    subgraph Client ["クライアント (iPhone / ユーザー)"]
+    subgraph Client
         Browser["Safari ブラウザ"]
         Camera["カメラ (背面/広角)"]
         Mic["マイク"]
@@ -21,27 +21,28 @@ graph TD
         Mic -->|音声ストリーム| Browser
     end
 
-    subgraph Tunnel ["通信トンネル"]
+    subgraph Tunnel
         Ngrok["ngrok (HTTPS/WSS)"]
     end
 
-    subgraph Server ["サーバー (Mac Localhost)"]
+    subgraph Server
         FastAPI["server.py (FastAPI)"]
         FileSystem["ローカル保存 (画像)"]
-        SQLite[("SQLite データベース")]
         
         FastAPI -->|保存| FileSystem
-        FastAPI -->|記録| SQLite
     end
 
-    subgraph Cloud ["クラウド (OpenAI)"]
+    subgraph Cloud
         RealtimeAPI["Realtime API (GPT-4o mini)"]
+        DynamoDB["AWS DynamoDB"]
+        
+        FastAPI -->|記録| DynamoDB
     end
 
     %% データフロー
-    Browser <-->|"WebSocket (音声/画像/イベント)"| Ngrok
-    Ngrok <-->|WebSocket| FastAPI
-    FastAPI <-->|"WebSocket (リレー)"| RealtimeAPI
+    Browser ---|WebSocket: 音声/画像/イベント| Ngrok
+    Ngrok ---|WebSocket| FastAPI
+    FastAPI ---|WebSocket: リレー| RealtimeAPI
 
     %% 詳細なやり取り
     Browser -- "1. 音声・画像送信" --> FastAPI
@@ -52,7 +53,7 @@ graph TD
 
     %% Function Calling
     RealtimeAPI -- "5. 関数呼び出し (log_disposal)" --> FastAPI
-    FastAPI -- "6. DB記録" --> SQLite
+    FastAPI -- "6. DB記録" --> DynamoDB
 ```
 
 ## 主要コンポーネント
@@ -72,7 +73,8 @@ graph TD
     *   **役割**: 音声と画像を解析し、音声応答を生成します。「ペットボトル検査官」として、厳しい基準（キャップ・ラベル・異物なし）で判定を行います。
 
 4.  **データベース**
-    *   **ファイル**: `camera/database.py` / `waste_data.db`
+    *   **ファイル**: `camera/database.py`
+    *   **サービス**: AWS DynamoDB
     *   **役割**: 廃棄の記録を保存します。判定結果（`is_valid`）や拒否理由（`rejection_reason`）を記録します。
 
 ## データフロー
@@ -90,5 +92,5 @@ graph TD
     *   キャップ、ラベル、中身の有無などをステップバイステップで確認します。
 6.  **アクション**:
     *   廃棄イベントを検知すると、OpenAIは `log_disposal` 関数を呼び出します。
-    *   サーバーは結果をSQLiteに記録します。
+    *   サーバーは結果をDynamoDBに記録します。
     *   OpenAIは音声応答（例：「ラベル剥がしてや！」）を生成し、ユーザーに返します。

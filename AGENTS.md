@@ -10,14 +10,14 @@
 - **Realtime API (GPT-4o-mini)**: 画像・音声をリアルタイムに解析し、音声応答を生成。
 - **厳格な判定**: ペットボトルのキャップ・ラベル・中身を厳しくチェック。
 - **ローカルサーバー (`camera/webapp/server.py`)**: FastAPI + WebSocket リレー。
-- **ローカルDB (`camera/database.py`)**: `waste_data.db` に判定結果と拒否理由を記録。
+- **データベース (`camera/database.py`)**: AWS DynamoDB に判定結果と拒否理由を記録。
 - **Legacy**: S3/Lambda構成は `legacy/` に移動。
 
 ## 共通ルール
 1. 変更前に `README.md` と `CLAUDE.md` を確認し、既存の意図やスタイルを踏襲する。
 2. Python コードは PEP 8 / 型ヒント / Google Docstring（`CLAUDE.md` 参照）を守る。
 3. 開発中は `pip install -r requirements.txt` で依存関係を揃え、`cd camera && python camera_capture.py` で挙動確認する。
-4. AWS 連携は未実装。仮想コードや資格情報はダミー値で書かず、コメントで TODO 管理する。
+4. AWS 連携 (DynamoDB) は実装済み。Rekognition等は未実装。
 5. 機密データ（画像、AWS キー等）はリポジトリに含めない。環境変数または `.env` の利用を明示する。
 6. **【重要】指示の厳守**: ユーザーから明示的な指示がない限り、たとえ良かれと思っても機能の追加や変更を勝手に行わない。「提案」と「実装」を明確に分け、実装前に必ず許可を得る。
 

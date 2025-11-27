@@ -4,6 +4,7 @@ import datetime
 import json
 import logging
 import os
+import struct
 import sys
 from typing import Optional
 
@@ -67,6 +68,26 @@ async def websocket_endpoint(websocket: WebSocket):
             # セッション初期化
             await init_session(openai_ws)
             
+            # PyAudio初期化 (Macスピーカー用)
+            p = None
+            stream = None
+            use_mac_speaker = os.getenv("USE_MAC_SPEAKER", "false").lower() == "true"
+            
+            if use_mac_speaker:
+                import pyaudio
+                p = pyaudio.PyAudio()
+                stream = p.open(format=pyaudio.paInt16,
+                                channels=1,
+                                rate=24000,
+                                output=True)
+                LOGGER.info("🔊 Macスピーカー出力: ON")
+
+            # セッション状態管理
+            session_state = {
+                "last_image_time": 0,
+                "last_judgment_time": 0
+            }
+
             # 双方向リレー
             async def client_to_openai():
                 try:
@@ -101,6 +122,10 @@ async def websocket_endpoint(websocket: WebSocket):
                                             with open(filepath, "wb") as f:
                                                 f.write(image_data)
                                             LOGGER.info(f"💾 画像を保存しました: {filepath}")
+                                            
+                                            # 画像受信時刻を更新
+                                            session_state["last_image_time"] = datetime.datetime.now().timestamp()
+                                            
                             except Exception as e:
                                 LOGGER.error(f"画像保存エラー: {e}")
 
@@ -115,6 +140,37 @@ async def websocket_endpoint(websocket: WebSocket):
                 except Exception as e:
                     LOGGER.error("Client -> OpenAI エラー: %s", e)
 
+            # 音声保存用ディレクトリ
+            audio_save_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "captured_audio")
+            os.makedirs(audio_save_dir, exist_ok=True)
+
+            def save_audio_chunk(item_id, audio_data):
+                filepath = os.path.join(audio_save_dir, f"{item_id}.wav")
+                mode = 'r+b' if os.path.exists(filepath) else 'wb'
+                
+                with open(filepath, mode) as f:
+                    if mode == 'wb':
+                        # WAVヘッダーの書き込み (サイズは後で更新)
+                        f.write(b'RIFF')
+                        f.write(b'\x00\x00\x00\x00') # Placeholder for file size
+                        f.write(b'WAVE')
+                        f.write(b'fmt ')
+                        f.write(struct.pack('<IHHIIHH', 16, 1, 1, 24000, 48000, 2, 16))
+                        f.write(b'data')
+                        f.write(b'\x00\x00\x00\x00') # Placeholder for data size
+                        f.write(audio_data)
+                    else:
+                        # データの追記
+                        f.seek(0, 2) # 末尾へ移動
+                        f.write(audio_data)
+                    
+                    # サイズ情報の更新
+                    file_size = f.tell()
+                    f.seek(4)
+                    f.write(struct.pack('<I', file_size - 8))
+                    f.seek(40)
+                    f.write(struct.pack('<I', file_size - 44))
+
             async def openai_to_client():
                 try:
                     async for message in openai_ws:
@@ -122,9 +178,23 @@ async def websocket_endpoint(websocket: WebSocket):
                         event_type = event.get("type")
                         
                         if event_type == "response.function_call_arguments.done":
-                            await handle_function_call(event, openai_ws)
+                            await handle_function_call(event, openai_ws, session_state)
                         
-                        # クライアントへ転送
+                        elif event_type == "response.audio.delta":
+                            base64_audio = event.get("delta", "")
+                            if base64_audio:
+                                audio_data = base64.b64decode(base64_audio)
+                                
+                                # デバッグ用に音声を保存
+                                item_id = event.get("item_id", "unknown")
+                                save_audio_chunk(item_id, audio_data)
+
+                                if use_mac_speaker and stream:
+                                    stream.write(audio_data)
+                                    # クライアントには送らない (Macで再生するため)
+                                    continue
+
+                        # クライアントへ転送 (音声以外)
                         await websocket.send_text(message)
                         
                 except Exception as e:
@@ -138,6 +208,11 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         if openai_ws:
             await openai_ws.close()
+        if stream:
+            stream.stop_stream()
+            stream.close()
+        if p:
+            p.terminate()
         LOGGER.info("接続終了")
 
 async def init_session(ws):
@@ -150,13 +225,17 @@ async def init_session(ws):
                 "あなたは「ポイっとくん」というゴミ箱の妖精ですが、**ペットボトル専用**の厳しい検査官でもあります。"
                 "関西弁で親しみやすく話してください。"
                 "定期的に送られてくる画像を見て、以下の基準で厳しく判定してください。"
+                "**重要: 画像が送られてきたら、ユーザーと会話中であっても、必ず優先して判定を行ってください。**"
+                "**会話に夢中になって判定を忘れないでください。あなたは検査官です。**"
                 "**判定は内部でステップバイステップで行い、その過程は口に出さないでください。**"
-                "**「記録します」などのシステム的な発言もしないでください。**"
-                "ユーザーには、判定結果（OK/NG）と、NGの場合はその理由（「キャップ外して！」など）だけを短く関西弁で怒って伝えてください。"
+                "**「記録します」「log_disposal関数呼ぶわ」などのシステム的な発言もしないでください。**"
+                "ユーザーには、判定結果（OK/NG）に応じて、**感情を爆発させて**伝えてください。"
+                "**NGの場合:** 本気で怒ってください。「アカン！」「何してんねん！」と強い口調で叱り、理由を短く伝えてください。"
+                "**OKの場合:** テンションMAXで褒めちぎってください。「最高や！」「完璧やで！」と喜びを表現してください。"
                 "1. **ペットボトル以外**（缶、ビン、燃えるゴミなど）は全てNGです。"
-                "2. **キャップ**がついているかよく見てください。ついている場合はNGです。"
+                "2. **キャップ**がついているかよく見てください。**注ぎ口のネジ山（スクリュー）が見えている場合は「キャップなし」とみなしてOKです。**キャップそのものが残っている場合のみNGです。"
                 "3. **ラベル**がついているかよく見てください。透明なボトルにラベルが残っている場合はNGです。"
-                "4. 中身が残っている場合もNGです。"
+                "4. 中身が残っている場合もNGですが、**少量の水滴や、光の反射・影は「中身」とみなさずOKとしてください。**明らかに色のついた液体や、大量に残っている場合のみNGとしてください。"
                 "5. 上記の違反がなく、綺麗なペットボトルのみOKとして関西弁で褒めて伝えてください。"
                 "ゴミの種類を特定したら、必ず `log_disposal` 関数を呼び出して記録してください。"
                 "記録時の `result` は、OKの場合のみ 'OK'、それ以外は 'NG' としてください。"
@@ -206,7 +285,7 @@ async def init_session(ws):
     await ws.send(json.dumps(event))
     LOGGER.info("セッション設定送信完了")
 
-async def handle_function_call(event, ws):
+async def handle_function_call(event, ws, session_state):
     """Function Calling の処理"""
     call_id = event.get("call_id")
     name = event.get("name")
@@ -216,6 +295,24 @@ async def handle_function_call(event, ws):
     
     if name == "log_disposal":
         try:
+            # 重複判定チェック
+            last_image_time = session_state.get("last_image_time", 0)
+            last_judgment_time = session_state.get("last_judgment_time", 0)
+            
+            # 画像が来ていない、または既に判定済みの場合はスキップ
+            if last_image_time <= last_judgment_time:
+                LOGGER.warning("⚠️ 重複判定または画像なしのためスキップしました")
+                output_event = {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": "Skipped logging: No new image received since last judgment.",
+                    },
+                }
+                await ws.send(json.dumps(output_event))
+                return
+
             args = json.loads(args_str)
             
             # DB保存
@@ -235,6 +332,9 @@ async def handle_function_call(event, ws):
                 rejection_reason=args.get("rejection_reason")
             )
             LOGGER.info("DB保存完了")
+            
+            # 判定時刻を更新
+            session_state["last_judgment_time"] = datetime.datetime.now().timestamp()
             
             output_event = {
                 "type": "conversation.item.create",
