@@ -35,4 +35,4 @@ lambda/waste_recognition.zip
 *.wav
 
 # Database
-# *.db (Included for Wackathon)
+*.db
