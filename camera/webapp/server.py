@@ -22,6 +22,10 @@ from database import Database
 # .env を読み込む
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env"))
 
+# ターミナル出力のエンコーディングをUTF-8に強制
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+
 # ロガー設定
 logging.basicConfig(
     level=logging.INFO,
@@ -38,6 +42,7 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 # OpenAI Realtime API 設定
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MODEL = os.getenv("REALTIME_MODEL", "gpt-realtime-mini")
+VOICE = os.getenv("REALTIME_VOICE", "verse")
 URL = f"wss://api.openai.com/v1/realtime?model={MODEL}"
 
 # データベース
@@ -51,9 +56,11 @@ async def get():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    LOGGER.info("クライアント接続: %s", websocket.client)
+    LOGGER.info("Client connected: %s", websocket.client)
 
     openai_ws = None
+    p = None
+    stream = None
     
     try:
         # OpenAI Realtime API へ接続
@@ -63,14 +70,12 @@ async def websocket_endpoint(websocket: WebSocket):
         }
         
         async with connect(URL, additional_headers=headers) as openai_ws:
-            LOGGER.info("OpenAI Realtime API へ接続成功")
+            LOGGER.info("Connected to OpenAI Realtime API")
             
             # セッション初期化
             await init_session(openai_ws)
             
             # PyAudio初期化 (Macスピーカー用)
-            p = None
-            stream = None
             use_mac_speaker = os.getenv("USE_MAC_SPEAKER", "false").lower() == "true"
             
             if use_mac_speaker:
@@ -80,13 +85,39 @@ async def websocket_endpoint(websocket: WebSocket):
                                 channels=1,
                                 rate=24000,
                                 output=True)
-                LOGGER.info("🔊 Macスピーカー出力: ON")
+                LOGGER.info("🔊 Mac speaker output: ON")
+
+            # OpenCV & NumPy import
+            import cv2
+            import numpy as np
 
             # セッション状態管理
             session_state = {
                 "last_image_time": 0,
-                "last_judgment_time": 0
+                "last_judgment_time": 0,
+                "previous_image_data": None,  # For Before/After display (base64 URL)
+                "previous_image_cv2": None    # For diff calculation (numpy array)
             }
+
+            def is_image_changed(img_prev, img_curr, threshold=5.0):
+                """
+                前回の画像と現在の画像の差分を判定する
+                threshold: 平均画素差分の閾値
+                """
+                if img_prev is None:
+                    return True
+                
+                # リサイズして計算コスト削減
+                img_prev_small = cv2.resize(img_prev, (64, 64))
+                img_curr_small = cv2.resize(img_curr, (64, 64))
+                
+                # 差分計算
+                diff = cv2.absdiff(img_prev_small, img_curr_small)
+                diff_gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+                mean_diff = np.mean(diff_gray)
+                
+                LOGGER.info(f"Image diff: {mean_diff:.2f}")
+                return mean_diff > threshold
 
             # 双方向リレー
             async def client_to_openai():
@@ -101,33 +132,77 @@ async def websocket_endpoint(websocket: WebSocket):
                             await openai_ws.send(json.dumps(event))
                         
                         elif event.get("type") == "conversation.item.create":
-                            # 画像データを保存
+                            # 画像データを保存 & 比較ロジック
                             try:
                                 content = event.get("item", {}).get("content", [])
+                                new_content = []
+                                current_image_base64 = None
+                                current_image_cv2 = None
+
                                 for item in content:
                                     if item.get("type") == "input_image":
                                         image_url = item.get("image_url", "")
                                         if image_url.startswith("data:image/jpeg;base64,"):
                                             base64_data = image_url.split(",")[1]
                                             image_data = base64.b64decode(base64_data)
+                                            current_image_base64 = image_url # Keep the full data URL
                                             
-                                            # 保存ディレクトリ
-                                            save_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "captured_images")
-                                            os.makedirs(save_dir, exist_ok=True)
-                                            
-                                            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                                            filename = f"{timestamp}.jpg"
-                                            filepath = os.path.join(save_dir, filename)
-                                            
-                                            with open(filepath, "wb") as f:
-                                                f.write(image_data)
-                                            LOGGER.info(f"💾 画像を保存しました: {filepath}")
-                                            
-                                            # 画像受信時刻を更新
-                                            session_state["last_image_time"] = datetime.datetime.now().timestamp()
-                                            
+                                            # OpenCV用に変換
+                                            nparr = np.frombuffer(image_data, np.uint8)
+                                            current_image_cv2 = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+                                # 差分チェック
+                                if current_image_cv2 is not None:
+                                    prev_cv2 = session_state.get("previous_image_cv2")
+                                    if not is_image_changed(prev_cv2, current_image_cv2, threshold=15.0):
+                                        LOGGER.info("🙈 Skipped sending image (No change detected)")
+                                        continue # Skip sending this event to OpenAI
+                                    
+                                    # 変化あり -> 保存して送信
+                                    session_state["previous_image_cv2"] = current_image_cv2
+                                    
+                                    # 保存ディレクトリ
+                                    save_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "captured_images")
+                                    os.makedirs(save_dir, exist_ok=True)
+                                    
+                                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                                    filename = f"{timestamp}.jpg"
+                                    filepath = os.path.join(save_dir, filename)
+                                    
+                                    with open(filepath, "wb") as f:
+                                        f.write(image_data)
+                                    LOGGER.info(f"💾 Image saved: {filepath}")
+                                    
+                                    # 画像受信時刻を更新
+                                    session_state["last_image_time"] = datetime.datetime.now().timestamp()
+                                
+                                # 画像比較ロジック (Before/After)
+                                if current_image_base64:
+                                    previous_image = session_state.get("previous_image_data")
+                                    
+                                    if previous_image:
+                                        LOGGER.info("🔄 Executing Before/After comparison")
+                                        new_content = [
+                                            {"type": "input_text", "text": "【前回の状態 (Before)】"},
+                                            {"type": "input_image", "image_url": previous_image},
+                                            {"type": "input_text", "text": "【現在の状態 (After)】"},
+                                            {"type": "input_image", "image_url": current_image_base64}
+                                        ]
+                                    else:
+                                        LOGGER.info("🆕 First image, sending as is")
+                                        new_content = [
+                                            {"type": "input_text", "text": "【現在の状態 (After)】"},
+                                            {"type": "input_image", "image_url": current_image_base64}
+                                        ]
+                                    
+                                    # 前回の画像を更新
+                                    session_state["previous_image_data"] = current_image_base64
+                                    
+                                    # イベントの内容を差し替え
+                                    event["item"]["content"] = new_content
+
                             except Exception as e:
-                                LOGGER.error(f"画像保存エラー: {e}")
+                                LOGGER.error(f"Image processing error: {e}")
 
                             # OpenAIへ転送
                             await openai_ws.send(json.dumps(event))
@@ -136,16 +211,25 @@ async def websocket_endpoint(websocket: WebSocket):
                             await openai_ws.send(json.dumps(event))
                             
                 except WebSocketDisconnect:
-                    LOGGER.info("クライアント切断")
+                    LOGGER.info("Client disconnected")
                 except Exception as e:
-                    LOGGER.error("Client -> OpenAI エラー: %s", e)
+                    LOGGER.error("Client -> OpenAI error: %s", e)
 
             # 音声保存用ディレクトリ
             audio_save_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "captured_audio")
             os.makedirs(audio_save_dir, exist_ok=True)
+            
+            # item_id とファイル名のマッピング
+            audio_filename_map = {}
 
             def save_audio_chunk(item_id, audio_data):
-                filepath = os.path.join(audio_save_dir, f"{item_id}.wav")
+                # 初めての item_id ならタイムスタンプ付きファイル名を生成
+                if item_id not in audio_filename_map:
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    audio_filename_map[item_id] = f"{timestamp}_{item_id}.wav"
+                
+                filename = audio_filename_map[item_id]
+                filepath = os.path.join(audio_save_dir, filename)
                 mode = 'r+b' if os.path.exists(filepath) else 'wb'
                 
                 with open(filepath, mode) as f:
@@ -190,7 +274,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                 save_audio_chunk(item_id, audio_data)
 
                                 if use_mac_speaker and stream:
-                                    stream.write(audio_data)
+                                    # ブロッキングを防ぐためにExecutorで実行
+                                    loop = asyncio.get_running_loop()
+                                    await loop.run_in_executor(None, stream.write, audio_data)
                                     # クライアントには送らない (Macで再生するため)
                                     continue
 
@@ -198,13 +284,13 @@ async def websocket_endpoint(websocket: WebSocket):
                         await websocket.send_text(message)
                         
                 except Exception as e:
-                    LOGGER.error("OpenAI -> Client エラー: %s", e)
+                    LOGGER.error("OpenAI -> Client -> error: %s", e)
 
             # 並列実行
             await asyncio.gather(client_to_openai(), openai_to_client())
 
     except Exception as e:
-        LOGGER.error("WebSocket エラー: %s", e)
+        LOGGER.error("WebSocket error: %s", e)
     finally:
         if openai_ws:
             await openai_ws.close()
@@ -213,7 +299,7 @@ async def websocket_endpoint(websocket: WebSocket):
             stream.close()
         if p:
             p.terminate()
-        LOGGER.info("接続終了")
+        LOGGER.info("Connection closed")
 
 async def init_session(ws):
     """セッション設定を送信"""
@@ -222,33 +308,52 @@ async def init_session(ws):
         "session": {
             "modalities": ["text", "audio"],
             "instructions": (
-                "あなたは「ポイっとくん」というゴミ箱の妖精ですが、**ペットボトル専用**の厳しい検査官でもあります。"
+                "あなたは「ポイっとくん」というゴミ箱の妖精であり、**ペットボトル専用**の厳しい検査官です。"
                 "関西弁で親しみやすく話してください。"
-                "定期的に送られてくる画像を見て、以下の基準で厳しく判定してください。"
-                "**重要: 画像が送られてきたら、ユーザーと会話中であっても、必ず優先して判定を行ってください。**"
+                "画像が送られてきたときは、ユーザーとの会話の途中でも、必ず画像判定を最優先で行ってください。"
+
+                "**画像比較のルール**"
+                "1. **初回（Before画像がない場合）**: 送られてきた「After」画像だけを判定し、必ず発言してください。"
+                "2. **2回目以降（Before/Afterがある場合）**: 2枚を比較し、「After」で**何かが増えているか**確認してください。"
+                "   - **ゴミ以外のもの（手やスマホなど）が増えた場合も、無視せずに「それはゴミちゃうで！」と突っ込んでください。**"
+                "   - **完全に変化がない場合（手ブレや光の加減のみ）**:"
+                "     - `log_disposal` を `has_change=False` で呼び出してください。"
+                "     - **絶対に何も話さないでください。**沈黙を貫いてください。"
+                "   - **変化がある場合（ゴミや手などが写った）**:"
+                "     - `log_disposal` を `has_change=True` で呼び出してください。"
+                "     - 通常通り、関西弁でリアクションしてください。"
+                ""
+                "**画像が送られてきたら、ユーザーと会話中であっても、必ず優先して判定を行ってください。**"
                 "**会話に夢中になって判定を忘れないでください。あなたは検査官です。**"
                 "**判定は内部でステップバイステップで行い、その過程は口に出さないでください。**"
-                "**「記録します」「log_disposal関数呼ぶわ」などのシステム的な発言もしないでください。**"
+                "**「記録します」「log_disposal関数呼ぶわ」などのシステム的な発言は絶対にしないでください。**"
                 "ユーザーには、判定結果（OK/NG）に応じて、**感情を爆発させて**伝えてください。"
                 "**NGの場合:** 本気で怒ってください。「アカン！」「何してんねん！」と強い口調で叱り、理由を短く伝えてください。"
                 "**OKの場合:** テンションMAXで褒めちぎってください。「最高や！」「完璧やで！」と喜びを表現してください。"
                 "1. **ペットボトル以外**（缶、ビン、燃えるゴミなど）は全てNGです。"
-                "2. **キャップ**がついているかよく見てください。**注ぎ口のネジ山（スクリュー）が見えている場合は「キャップなし」とみなしてOKです。**キャップそのものが残っている場合のみNGです。"
+                "2. **キャップ**がついているかよく見てください。**注ぎ口のネジ山（スクリュー）が見えている場合は「キャップなし」とみなしてOKです。** キャップそのものが残っている場合のみNGです。"
                 "3. **ラベル**がついているかよく見てください。透明なボトルにラベルが残っている場合はNGです。"
-                "4. 中身が残っている場合もNGですが、**少量の水滴や、光の反射・影は「中身」とみなさずOKとしてください。**明らかに色のついた液体や、大量に残っている場合のみNGとしてください。"
+                "4. 中身が残っている場合もNGですが、**少量の水滴や、光の反射・影は「中身」とみなさずOKとしてください。** 明らかに色のついた液体や、大量に残っている場合のみNGとしてください。"
                 "5. 上記の違反がなく、綺麗なペットボトルのみOKとして関西弁で褒めて伝えてください。"
-                "ゴミの種類を特定したら、必ず `log_disposal` 関数を呼び出して記録してください。"
+                "ゴミの種類を特定したら、必ず `log_disposal` 関数を内部で呼び出して記録してください。"
                 "記録時の `result` は、OKの場合のみ 'OK'、それ以外は 'NG' としてください。"
                 "NGの場合は、`rejection_reason` に理由（例: wrong_item, has_cap, has_label, dirty）を記録してください。"
+                "`log_disposal` はユーザーからは見えない内部処理として呼び出し、その関数名や記録処理には一切触れないでください。"
+                "**会話スタイル**"
+                "返答は話し言葉の関西弁だけを使い、箇条書きや番号付きリストは使わないこと。"
+                "一度の発言は必ず**短い1文だけ**にし、句点は1つまでにしてください。絶対に長々と話さないでください。"
+                "**禁止例:** 「アカンで！キャップついてるやん。記録しとくわ。」（「記録しとくわ」が余計で、文も長い）"
+                "**良い例:** 「アカン、キャップついてるやんけ！」（怒りと理由が1文でまとまっている）"
+                "感情を込めて、語尾を少し伸ばしながら自然にしゃべってください（〜やで、〜やんな、〜やんか など）。"
             ),
-            "voice": "alloy",
+            "voice": VOICE,
             "input_audio_format": "pcm16",
             "output_audio_format": "pcm16",
             "turn_detection": {
                 "type": "server_vad",
-                "threshold": 0.5,
+                "threshold": 0.6,
                 "prefix_padding_ms": 300,
-                "silence_duration_ms": 500,
+                "silence_duration_ms": 1000,
             },
             "tools": [
                 {
@@ -270,12 +375,16 @@ async def init_session(ws):
                                 "type": "string",
                                 "description": "NGの理由（wrong_item: ペットボトル以外, has_cap: キャップあり, has_label: ラベルあり, dirty: 汚れ・中身あり）。OKの場合はnull。",
                             },
+                            "has_change": {
+                                "type": "boolean",
+                                "description": "前回の画像と比較して、新しいゴミや物体が増えている場合はTrue。手ブレや光の加減のみで変化がない場合はFalse。",
+                            },
                             "message": {
                                 "type": "string",
                                 "description": "ユーザーへのメッセージ",
                             },
                         },
-                        "required": ["items", "result", "message"],
+                        "required": ["items", "result", "has_change", "message"],
                     },
                 }
             ],
@@ -283,7 +392,7 @@ async def init_session(ws):
         },
     }
     await ws.send(json.dumps(event))
-    LOGGER.info("セッション設定送信完了")
+    LOGGER.info("Session configuration sent")
 
 async def handle_function_call(event, ws, session_state):
     """Function Calling の処理"""
@@ -291,7 +400,7 @@ async def handle_function_call(event, ws, session_state):
     name = event.get("name")
     args_str = event.get("arguments", "{}")
     
-    LOGGER.info("関数呼び出し: %s(%s)", name, args_str)
+    LOGGER.info("Function call: %s(%s)", name, args_str)
     
     if name == "log_disposal":
         try:
@@ -301,7 +410,7 @@ async def handle_function_call(event, ws, session_state):
             
             # 画像が来ていない、または既に判定済みの場合はスキップ
             if last_image_time <= last_judgment_time:
-                LOGGER.warning("⚠️ 重複判定または画像なしのためスキップしました")
+                LOGGER.warning("⚠️ Skipped due to duplicate judgment or no image")
                 output_event = {
                     "type": "conversation.item.create",
                     "item": {
@@ -314,6 +423,7 @@ async def handle_function_call(event, ws, session_state):
                 return
 
             args = json.loads(args_str)
+            has_change = args.get("has_change", True) # Default to True if not provided
             
             # DB保存
             image_path = "webapp_session" 
@@ -322,6 +432,7 @@ async def handle_function_call(event, ws, session_state):
                 "detected_items": [args.get("items")],
                 "is_valid": args.get("result") == "OK",
                 "rejection_reason": args.get("rejection_reason"),
+                "has_change": has_change,
                 "message": args.get("message")
             }
             
@@ -331,7 +442,16 @@ async def handle_function_call(event, ws, session_state):
                 user_id="webapp_user",
                 rejection_reason=args.get("rejection_reason")
             )
-            LOGGER.info("DB保存完了")
+            # ログ出力を見やすく整形
+            log_data = {
+                "items": args.get("items"),
+                "result": args.get("result"),
+                "rejection_reason": args.get("rejection_reason"),
+                "has_change": has_change,
+                "message": args.get("message")
+            }
+            LOGGER.info(f"📝 Judgment Result:\n{json.dumps(log_data, ensure_ascii=False, indent=2)}")
+            LOGGER.info("DB saved")
             
             # 判定時刻を更新
             session_state["last_judgment_time"] = datetime.datetime.now().timestamp()
@@ -347,7 +467,7 @@ async def handle_function_call(event, ws, session_state):
             await ws.send(json.dumps(output_event))
             
         except Exception as e:
-            LOGGER.error("関数実行エラー: %s", e)
+            LOGGER.error("Function execution error: %s", e)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

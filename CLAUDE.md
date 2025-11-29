@@ -5,7 +5,7 @@
 ## ビルド/実行/テスト コマンド
 
 ### 環境セットアップ
-- 依存関係のインストール: `pip install -r requirements.txt`
+- 依存関係のインストール: `pip install -r requirements.txt` (または `pip install opencv-python numpy ...`)
 - 仮想環境の作成: `uv venv` または `python -m venv .venv`
 - 環境のアクティベート: `source .venv/bin/activate`
 
@@ -38,6 +38,10 @@
 
 ### 重要な実装詳細
 
+**変化検知と無言モード**:
+- **OpenCV差分チェック**: 画像に変化がない場合、APIへの送信をスキップします。
+- **AI変化判定**: 手ブレ等で送信された場合でも、AIが「意味のある変化なし」と判断すれば `has_change=False` を記録し、**発話しません**。
+
 **ゴミ分別・判定ロジック (OpenAI)**:
 - モデル: `gpt-4o-mini` (Realtime API)
 - **厳格なペットボトル判定**:
@@ -48,6 +52,7 @@
 - サービス: AWS DynamoDB
 - テーブル名: `waste_disposal_history` (環境変数で指定可)
 - 構成: Partition Key=`user_id`, Sort Key=`timestamp`
+- **スキーマ詳細**: `doc/database_schema.md` を参照
 
 ### 主要コンポーネント
 

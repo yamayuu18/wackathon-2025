@@ -9,6 +9,7 @@
 - **Webアプリ版 (Current)**: iPhone (Safari) からアクセスし、カメラ(Flash/0.5x)とマイクを制御。
 - **Realtime API (GPT-4o-mini)**: 画像・音声をリアルタイムに解析し、音声応答を生成。
 - **厳格な判定**: ペットボトルのキャップ・ラベル・中身を厳しくチェック。
+- **無言モード**: 変化がない場合（手ブレ等）はAIが自律的に判断して沈黙を守る。
 - **ローカルサーバー (`camera/webapp/server.py`)**: FastAPI + WebSocket リレー。
 - **データベース (`camera/database.py`)**: AWS DynamoDB に判定結果と拒否理由を記録。
 - **Legacy**: S3/Lambda構成は `legacy/` に移動。
