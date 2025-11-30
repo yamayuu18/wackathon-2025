@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ゴミ分別分析ダッシュボード</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
+    <link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            /* 1. 色数は3色以内に抑える (ベース、メイン、アクセント) + 文字色 */
+            --base-color: #f9f9f9;
+            /* 背景: 明るいグレー/白 */
+            --main-color: #a0c4ff;
+            /* メイン: パステルブルー (信頼感、清潔感) */
+            --accent-color: #ffadad;
+            /* アクセント: パステルレッド (注意、NG) */
+            --text-color: #505050;
+            /* 文字: 濃いグレー (黒より柔らかく) */
+            --card-bg: #ffffff;
+
+            /* 補助色 (明度差で表現) */
+            --ok-color: #caffbf;
+            /* OK用: パステルグリーン */
+        }
+
+        body {
+            background-color: var(--base-color);
+            color: var(--text-color);
+            font-family: 'M PLUS Rounded 1c', sans-serif;
+            /* 4. フォントは1種類 */
+            margin: 0;
+            padding: 40px;
+            /* 5. 余白を十分に取る */
+            height: 100vh;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ヘッダー */
+        header {
+            margin-bottom: 30px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.8rem;
+            color: var(--text-color);
+            font-weight: 700;
+        }
+
+        .subtitle {
+            font-size: 1rem;
+            color: #888;
+            margin-top: 5px;
+        }
+
+        /* 8. Z型配置: 左上(重要) -> 右下 */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            /* 左サイドバー(KPI) + 右メイン */
+            grid-template-rows: 1fr;
+            gap: 30px;
+            flex: 1;
+            min-height: 0;
+        }
+
+        /* 左カラム: 重要指標 (KPI) */
+        .kpi-column {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* 右カラム: チャートエリア */
+        .charts-column {
+            display: grid;
+            grid-template-rows: 1fr 1fr;
+            /* 上下均等 */
+            gap: 20px;
+            min-height: 0;
+        }
+
+        .bottom-charts {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            /* 左右均等 */
+            gap: 20px;
+            min-height: 0;
+        }
+
+        .stat-card {
+            background-color: var(--card-bg);
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 10px 25px rgba(160, 196, 255, 0.15);
+            /* 影で浮き上がらせる */
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            flex: 1;
+            transition: transform 0.2s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-3px);
+        }
+
+        /* 6. アイコンで直感的に */
+        .stat-icon {
+            font-size: 2rem;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: #999;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .stat-value {
+            font-size: 3rem;
+            font-weight: 700;
+            color: var(--text-color);
+            line-height: 1;
+            margin-top: 5px;
+        }
+
+        /* 色による意味づけ */
+        .stat-card.total {
+            border-top: 5px solid var(--main-color);
+        }
+
+        .stat-card.ok {
+            border-top: 5px solid var(--ok-color);
+        }
+
+        .stat-card.ng {
+            border-top: 5px solid var(--accent-color);
+        }
+
+        /* チャートカード共通 */
+        .chart-card {
+            background-color: var(--card-bg);
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.05);
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .chart-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-color);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .chart-wrapper {
+            flex: 1;
+            position: relative;
+            min-height: 0;
+        }
+
+        /* 3. 反対色(補色)で目立たせる: NG理由のグラフはアクセントカラーを使用 */
+
+        /* タイムライン (ログ) */
+        .timeline-card {
+            background-color: var(--card-bg);
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.05);
+            flex: 1;
+            /* 残りの高さを埋める */
+            overflow-y: auto;
+            /* スクロール可能に */
+            display: flex;
+            flex-direction: column;
+        }
+
+        .timeline-title {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--text-color);
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .log-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+            animation: fadeIn 0.5s ease;
+        }
+
+        .log-item:last-child {
+            border-bottom: none;
+        }
+
+        .log-time {
+            font-size: 0.8rem;
+            color: #aaa;
+            min-width: 60px;
+        }
+
+        .log-status {
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.8rem;
+        }
+
+        .log-status.ok {
+            background-color: var(--ok-color);
+            color: #333;
+        }
+
+        .log-status.ng {
+            background-color: var(--accent-color);
+            color: #fff;
+        }
+
+        .log-msg {
+            font-size: 0.9rem;
+            color: var(--text-color);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* フラッシュエフェクト */
+        @keyframes flashGreen {
+            0% {
+                background-color: rgba(202, 255, 191, 0.5);
+            }
+
+            100% {
+                background-color: var(--base-color);
+            }
+        }
+
+        @keyframes flashRed {
+            0% {
+                background-color: rgba(255, 173, 173, 0.5);
+            }
+
+            100% {
+                background-color: var(--base-color);
+            }
+        }
+
+        .flash-ok {
+            animation: flashGreen 1s ease;
+        }
+
+        .flash-ng {
+            animation: flashRed 1s ease;
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <div>
+            <h1>ゴミ分別分析ダッシュボード</h1>
+            <div class="subtitle">AIによるリアルタイム判定モニタリング</div>
+        </div>
+    </header>
+
+    <div class="dashboard-grid">
+        <!-- 左: 重要指標 (KPI) -->
+        <div class="kpi-column">
+            <div class="stat-card total">
+                <div class="stat-icon">📊</div>
+                <div class="stat-label">判定総数</div>
+                <div class="stat-value" id="total-val">0</div>
+            </div>
+            <div class="stat-card ok">
+                <div class="stat-icon">✅</div>
+                <div class="stat-label">合格 (OK)</div>
+                <div class="stat-value" id="ok-val">0</div>
+            </div>
+            <div class="stat-card ng">
+                <div class="stat-icon">⚠️</div>
+                <div class="stat-label">不合格 (NG)</div>
+                <div class="stat-value" id="ng-val">0</div>
+            </div>
+
+            <!-- タイムライン追加 -->
+            <div class="timeline-card">
+                <div class="timeline-title"><span>📜</span> 最近の判定</div>
+                <div id="timeline-list">
+                    <!-- ログがここに追加される -->
+                </div>
+            </div>
+        </div>
+
+        <!-- 右: チャートエリア -->
+        <div class="charts-column">
+            <!-- 上: 日別推移 -->
+            <div class="chart-card">
+                <div class="chart-header">
+                    <div class="chart-title"><span>📅</span> 日別推移 (合格 vs 不合格)</div>
+                </div>
+                <div class="chart-wrapper">
+                    <canvas id="dailyChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 下: 円グラフ & 棒グラフ -->
+            <div class="bottom-charts">
+                <!-- 合格率 -->
+                <div class="chart-card">
+                    <div class="chart-header">
+                        <div class="chart-title"><span>📈</span> 合格率</div>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="pieChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- NG理由 -->
+                <div class="chart-card">
+                    <div class="chart-header">
+                        <div class="chart-title"><span>🚫</span> 不合格の理由</div>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="reasonsChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // プラグインを登録
+        Chart.register(ChartDataLabels);
+
+        Chart.defaults.font.family = "'M PLUS Rounded 1c', sans-serif";
+        Chart.defaults.color = '#888';
+
+        let reasonsChart, pieChart, dailyChart;
+        let lastTotal = 0; // フラッシュ判定用
+
+        function initCharts() {
+            // 1. Daily Chart (Stacked Bar)
+            const ctxDaily = document.getElementById('dailyChart').getContext('2d');
+            dailyChart = new Chart(ctxDaily, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: '合格',
+                            data: [],
+                            backgroundColor: '#caffbf',
+                            borderRadius: 4,
+                        },
+                        {
+                            label: '不合格',
+                            data: [],
+                            backgroundColor: '#ffadad',
+                            borderRadius: 4,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { stacked: true, grid: { display: false } },
+                        y: { stacked: true, grid: { borderDash: [5, 5] } }
+                    },
+                    plugins: {
+                        legend: { position: 'top', align: 'end' },
+                        datalabels: {
+                            display: true,
+                            color: '#505050',
+                            font: { size: 10 },
+                            formatter: (value) => value > 0 ? value : ''
+                        }
+                    }
+                }
+            });
+
+            // 2. Pie Chart (Approval Rate)
+            const ctxPie = document.getElementById('pieChart').getContext('2d');
+            pieChart = new Chart(ctxPie, {
+                type: 'doughnut',
+                data: {
+                    labels: ['合格', '不合格'],
+                    datasets: [{
+                        data: [0, 0],
+                        backgroundColor: ['#caffbf', '#ffadad'], // 2. 明度を生かす: 淡い色
+                        borderWidth: 0,
+                        hoverOffset: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '60%',
+                    plugins: {
+                        legend: { position: 'right', labels: { usePointStyle: true, font: { size: 12 } } },
+                        datalabels: {
+                            color: '#505050',
+                            font: { weight: 'bold', size: 14 },
+                            formatter: (value, ctx) => {
+                                if (value === 0) return '';
+                                let sum = 0;
+                                let dataArr = ctx.chart.data.datasets[0].data;
+                                dataArr.map(data => { sum += data; });
+                                return (value * 100 / sum).toFixed(1) + "%";
+                            }
+                        }
+                    }
+                }
+            });
+
+            // 3. Bar Chart (Rejection Reasons)
+            const ctxReasons = document.getElementById('reasonsChart').getContext('2d');
+            reasonsChart = new Chart(ctxReasons, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '件数',
+                        data: [],
+                        backgroundColor: '#ffadad', // 3. 反対色で目立たせる (NGは赤系)
+                        borderRadius: 8,
+                        barThickness: 25
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        datalabels: {
+                            anchor: 'end',
+                            align: 'end',
+                            color: '#505050',
+                            font: { weight: 'bold', size: 12 },
+                            formatter: (value) => value > 0 ? value : ''
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: false,
+                            grace: '15%' // ラベルが見切れないように余白を追加
+                        },
+                        y: {
+                            grid: { display: false }, // 罫線を消してスッキリさせる
+                            ticks: { font: { size: 12, weight: 'bold' }, color: '#505050' }
+                        }
+                    }
+                }
+            });
+        }
+
+        async function updateStats() {
+            try {
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+
+                // Flash Effect Logic
+                if (lastTotal > 0 && data.total > lastTotal) {
+                    // New record added
+                    const latest = data.recent_logs[0];
+                    const body = document.body;
+                    body.classList.remove('flash-ok', 'flash-ng');
+                    void body.offsetWidth; // Trigger reflow
+
+                    if (latest && latest.is_valid) {
+                        body.classList.add('flash-ok');
+                    } else {
+                        body.classList.add('flash-ng');
+                    }
+                }
+                lastTotal = data.total;
+
+                // Update Counters
+                document.getElementById('total-val').textContent = data.total;
+                document.getElementById('ok-val').textContent = data.ok;
+                document.getElementById('ng-val').textContent = data.ng;
+
+                // Update Timeline
+                const timelineList = document.getElementById('timeline-list');
+                timelineList.innerHTML = ''; // Clear current
+                if (data.recent_logs) {
+                    data.recent_logs.forEach(log => {
+                        const div = document.createElement('div');
+                        div.className = 'log-item';
+
+                        // Time formatting
+                        const date = new Date(log.timestamp);
+                        const timeStr = date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+                        // Status
+                        const statusClass = log.is_valid ? 'ok' : 'ng';
+                        const statusText = log.is_valid ? 'OK' : 'NG';
+
+                        // Reason mapping
+                        const reasonMap = {
+                            'has_cap': 'キャップ付き',
+                            'has_label': 'ラベル付き',
+                            'dirty': '中身入り',
+                            'wrong_item': '異物',
+                            'unknown': '不明'
+                        };
+                        const reasonText = log.rejection_reason ? (reasonMap[log.rejection_reason] || log.rejection_reason) : 'ペットボトル';
+
+                        div.innerHTML = `
+                            <div class="log-time">${timeStr}</div>
+                            <div class="log-status ${statusClass}">${statusText}</div>
+                            <div class="log-msg">${reasonText}</div>
+                        `;
+                        timelineList.appendChild(div);
+                    });
+                }
+
+                // Update Daily Chart
+                if (data.daily) {
+                    const dates = Object.keys(data.daily);
+                    const okData = dates.map(d => data.daily[d].ok);
+                    const ngData = dates.map(d => data.daily[d].ng);
+
+                    dailyChart.data.labels = dates;
+                    dailyChart.data.datasets[0].data = okData;
+                    dailyChart.data.datasets[1].data = ngData;
+                    dailyChart.update();
+                }
+
+                // Update Pie Chart
+                pieChart.data.datasets[0].data = [data.ok, data.ng];
+                pieChart.update();
+
+                // Update Reasons Chart
+                const sortedReasons = Object.entries(data.reasons).sort((a, b) => b[1] - a[1]);
+                const reasonMap = {
+                    'has_cap': 'キャップ付き',
+                    'has_label': 'ラベル付き',
+                    'dirty': '中身入り',
+                    'wrong_item': '異物',
+                    'unknown': '不明'
+                };
+
+                reasonsChart.data.labels = sortedReasons.map(([key, val]) => reasonMap[key] || key);
+                reasonsChart.data.datasets[0].data = sortedReasons.map(([key, val]) => val);
+                reasonsChart.update();
+
+            } catch (e) {
+                console.error("Failed to fetch stats:", e);
+            }
+        }
+
+        initCharts();
+        updateStats();
+        setInterval(updateStats, 3000);
+    </script>
+</body>
+
+</html>

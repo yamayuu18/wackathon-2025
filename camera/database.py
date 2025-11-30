@@ -69,6 +69,71 @@ class Database:
         except Exception as e:
             print(f"❌ DynamoDB取得エラー: {e}")
             return []
+        except Exception as e:
+            print(f"❌ DynamoDB取得エラー: {e}")
+            return []
+
+    def get_stats(self):
+        """
+        全データをスキャンして統計情報を取得する
+        (デモ用なので全件スキャンでOK)
+        """
+        try:
+            # 全件スキャン (件数が多すぎると遅くなるがデモならOK)
+            response = self.table.scan()
+            items = response.get('Items', [])
+            
+            total_ok = 0
+            total_ng = 0
+            reasons = {}
+            daily_stats = {}
+
+            for item in items:
+                is_valid = item.get('is_valid', False)
+                timestamp = item.get('timestamp', '')
+                
+                # 日付の抽出 (ISOフォーマット想定: YYYY-MM-DD...)
+                date_str = timestamp.split('T')[0] if 'T' in timestamp else 'Unknown'
+
+                if date_str not in daily_stats:
+                    daily_stats[date_str] = {'ok': 0, 'ng': 0}
+
+                if is_valid:
+                    total_ok += 1
+                    daily_stats[date_str]['ok'] += 1
+                else:
+                    total_ng += 1
+                    daily_stats[date_str]['ng'] += 1
+                    reason = item.get('rejection_reason')
+                    if reason:
+                        reasons[reason] = reasons.get(reason, 0) + 1
+            
+            # 日付順にソート
+            sorted_daily = dict(sorted(daily_stats.items()))
+
+            # 最新のログを取得 (タイムスタンプで降順ソートして先頭10件)
+            # itemsはscanで取得しているので順序保証なし -> ソートが必要
+            sorted_items = sorted(items, key=lambda x: x.get('timestamp', ''), reverse=True)[:10]
+            recent_logs = []
+            for item in sorted_items:
+                recent_logs.append({
+                    'timestamp': item.get('timestamp', ''),
+                    'is_valid': item.get('is_valid', False),
+                    'rejection_reason': item.get('rejection_reason'),
+                    'message': item.get('message', '')
+                })
+
+            return {
+                "total": len(items),
+                "ok": total_ok,
+                "ng": total_ng,
+                "reasons": reasons,
+                "daily": sorted_daily,
+                "recent_logs": recent_logs
+            }
+        except Exception as e:
+            print(f"❌ 統計取得エラー: {e}")
+            return {"total": 0, "ok": 0, "ng": 0, "reasons": {}, "daily": {}, "recent_logs": []}
 
 if __name__ == "__main__":
     # Simple test

@@ -11,7 +11,7 @@ from typing import Optional
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from websockets.asyncio.client import connect
 
@@ -45,13 +45,40 @@ MODEL = os.getenv("REALTIME_MODEL", "gpt-realtime-mini")
 VOICE = os.getenv("REALTIME_VOICE", "verse")
 URL = f"wss://api.openai.com/v1/realtime?model={MODEL}"
 
+# 環境変数の読み込み
+DETECTION_DELAY = int(os.getenv("DETECTION_DELAY", "5"))
+IMAGE_INTERVAL = int(os.getenv("IMAGE_INTERVAL", "3"))
+VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "0.9"))
+
+if not OPENAI_API_KEY:
+    LOGGER.error("OPENAI_API_KEY is not set")
+    raise ValueError("OPENAI_API_KEY is not set")
+
 # データベース
 db = Database()
 
 @app.get("/")
 async def get():
-    with open(os.path.join(static_dir, "index.html")) as f:
-        return HTMLResponse(f.read())
+    return FileResponse("camera/webapp/index.html")
+
+@app.get("/config")
+async def get_config():
+    """フロントエンドに設定値を渡す"""
+    return {
+        "detection_delay": DETECTION_DELAY,
+        "image_interval": IMAGE_INTERVAL
+    }
+
+@app.get("/api/stats")
+async def get_stats():
+    """統計情報を返す"""
+    stats = db.get_stats()
+    return stats
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def get_dashboard():
+    """ダッシュボード画面を返す"""
+    return FileResponse("camera/webapp/dashboard.html")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -73,6 +100,9 @@ async def websocket_endpoint(websocket: WebSocket):
             LOGGER.info("Connected to OpenAI Realtime API")
             
             # セッション初期化
+            # init_session 内で VAD_THRESHOLD を使うために引数に追加するか、グローバルを使う
+            # ここでは init_session を修正する方がきれいだが、global 参照でも動く
+            # server.py の構造上 init_session は外にあるので、init_session も修正が必要
             await init_session(openai_ws)
             
             # PyAudio初期化 (Macスピーカー用)
@@ -119,6 +149,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 LOGGER.info(f"Image diff: {mean_diff:.2f}")
                 return mean_diff > threshold
 
+            # AI発話中フラグ (辞書型にして参照渡し可能にする)
+            is_ai_speaking = {"value": False}
+
             # 双方向リレー
             async def client_to_openai():
                 try:
@@ -128,6 +161,10 @@ async def websocket_endpoint(websocket: WebSocket):
                         
                         # クライアントからのイベントを処理
                         if event.get("type") == "input_audio_buffer.append":
+                            # AIが発話中はマイク入力を無視する (半二重通信)
+                            if is_ai_speaking["value"]:
+                                continue
+                                
                             # 音声データはそのまま転送
                             await openai_ws.send(json.dumps(event))
                         
@@ -265,6 +302,9 @@ async def websocket_endpoint(websocket: WebSocket):
                             await handle_function_call(event, openai_ws, session_state)
                         
                         elif event_type == "response.audio.delta":
+                            # AIが喋り始めたらフラグON
+                            is_ai_speaking["value"] = True
+                            
                             base64_audio = event.get("delta", "")
                             if base64_audio:
                                 audio_data = base64.b64decode(base64_audio)
@@ -279,6 +319,10 @@ async def websocket_endpoint(websocket: WebSocket):
                                     await loop.run_in_executor(None, stream.write, audio_data)
                                     # クライアントには送らない (Macで再生するため)
                                     continue
+                        
+                        elif event_type == "response.audio.done" or event_type == "response.done":
+                            # AIが喋り終わったらフラグOFF
+                            is_ai_speaking["value"] = False
 
                         # クライアントへ転送 (音声以外)
                         await websocket.send_text(message)
@@ -330,6 +374,8 @@ async def init_session(ws):
                 "ユーザーには、判定結果（OK/NG）に応じて、**感情を爆発させて**伝えてください。"
                 "**NGの場合:** 本気で怒ってください。「アカン！」「何してんねん！」と強い口調で叱り、理由を短く伝えてください。"
                 "**OKの場合:** テンションMAXで褒めちぎってください。「最高や！」「完璧やで！」と喜びを表現してください。"
+                "**重要: 画像は「ゴミ箱の中」を写しています。ゴミ箱のフチ、内側の壁、底、背景などは「ゴミ以外の異物」とみなさず、無視してください。**"
+                "**あくまで「新しく投入された物体」だけを見て、それがペットボトルかどうかを判定してください。**"
                 "1. **ペットボトル以外**（缶、ビン、燃えるゴミなど）は全てNGです。"
                 "2. **キャップ**がついているかよく見てください。**注ぎ口のネジ山（スクリュー）が見えている場合は「キャップなし」とみなしてOKです。** キャップそのものが残っている場合のみNGです。"
                 "3. **ラベル**がついているかよく見てください。透明なボトルにラベルが残っている場合はNGです。"
@@ -351,7 +397,7 @@ async def init_session(ws):
             "output_audio_format": "pcm16",
             "turn_detection": {
                 "type": "server_vad",
-                "threshold": 0.6,
+                "threshold": VAD_THRESHOLD,
                 "prefix_padding_ms": 300,
                 "silence_duration_ms": 1000,
             },
@@ -461,10 +507,20 @@ async def handle_function_call(event, ws, session_state):
                 "item": {
                     "type": "function_call_output",
                     "call_id": call_id,
-                    "output": "Successfully logged to database.",
+                    "output": "Successfully logged.",
                 },
             }
             await ws.send(json.dumps(output_event))
+
+            # ツール出力後の余計な発話を防ぐために、明示的に「何もしない」レスポンスを作成
+            # または、instructionsで沈黙を強制する
+            silence_event = {
+                "type": "response.create",
+                "response": {
+                    "instructions": "ツール出力が完了しました。ユーザーへの報告は既に済んでいるため、追加の発言は一切しないでください。"
+                }
+            }
+            await ws.send(json.dumps(silence_event))
             
         except Exception as e:
             LOGGER.error("Function execution error: %s", e)

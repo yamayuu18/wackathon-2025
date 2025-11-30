@@ -114,6 +114,9 @@
 
         <div class="row">
             <button id="connect-btn">接続開始</button>
+            <button id="detect-btn" disabled>ゴミ検知開始</button>
+        </div>
+        <div class="row">
             <button id="flash-btn" disabled>⚡ Flash</button>
         </div>
     </div>
@@ -126,6 +129,7 @@
         const video = document.getElementById('video');
         const cameraSelect = document.getElementById('camera-select');
         const connectBtn = document.getElementById('connect-btn');
+        const detectBtn = document.getElementById('detect-btn');
         const flashBtn = document.getElementById('flash-btn');
         const statusDiv = document.getElementById('status');
 
@@ -134,6 +138,7 @@
         let audioContext = null;
         let audioWorkletNode = null;
         let track = null; // Video track for flash control
+        let imageInterval = null; // Interval ID for image loop
 
         // カメラ一覧取得
         async function getCameras() {
@@ -251,6 +256,10 @@
                 ws.close();
                 connectBtn.textContent = '接続開始';
                 connectBtn.classList.remove('recording');
+                detectBtn.disabled = true;
+                detectBtn.textContent = 'ゴミ検知開始';
+                detectBtn.classList.remove('recording');
+                stopImageLoop();
                 return;
             }
 
@@ -270,12 +279,10 @@
                 statusDiv.textContent = '接続完了';
                 connectBtn.textContent = '切断';
                 connectBtn.classList.add('recording');
+                detectBtn.disabled = false; // 検知ボタン有効化
 
                 // 音声処理開始
                 await startAudioProcessing(stream);
-
-                // 画像送信ループ開始 (30秒間隔)
-                startImageLoop(ws);
             };
 
             ws.onmessage = async (event) => {
@@ -289,18 +296,80 @@
                 statusDiv.textContent = '切断されました';
                 connectBtn.textContent = '接続開始';
                 connectBtn.classList.remove('recording');
+                detectBtn.disabled = true;
+                detectBtn.textContent = 'ゴミ検知開始';
+                detectBtn.classList.remove('recording');
+                stopImageLoop();
                 stopAudioProcessing();
             };
         };
 
-        // 画像送信ループ
-        async function startImageLoop(socket) {
-            console.log("Image loop started");
-            while (socket && socket.readyState === WebSocket.OPEN) {
-                sendImage();
-                await new Promise(r => setTimeout(r, 30000)); // 30秒待機
+        // ゴミ検知開始処理
+        detectBtn.onclick = async () => {
+            detectBtn.disabled = true; // 二度押し防止
+
+            // 設定取得
+            let delay = 5;
+            let interval = 3;
+            try {
+                const res = await fetch('/config');
+                const config = await res.json();
+                delay = config.detection_delay;
+                interval = config.image_interval;
+            } catch (e) {
+                console.error("Config fetch error:", e);
             }
-            console.log("Image loop stopped");
+
+            // カウントダウン
+            for (let i = delay; i > 0; i--) {
+                detectBtn.textContent = `開始まで ${i}秒...`;
+                await new Promise(r => setTimeout(r, 1000));
+            }
+
+            detectBtn.textContent = '検知中...';
+            detectBtn.classList.add('recording');
+
+            // 画像送信ループ開始
+            startImageLoop(ws, interval * 1000);
+        };
+
+        function sendTextMessage(text) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            const event = {
+                type: "conversation.item.create",
+                item: {
+                    type: "message",
+                    role: "user",
+                    content: [{ type: "input_text", text: text }]
+                }
+            };
+            ws.send(JSON.stringify(event));
+            ws.send(JSON.stringify({ type: "response.create" }));
+        }
+
+        // 画像送信ループ
+        async function startImageLoop(socket, intervalMs) {
+            if (!intervalMs || intervalMs < 1000) intervalMs = 3000;
+            console.log("Image loop started with interval:", intervalMs);
+            // 初回即時実行
+            sendImage();
+
+            // 定期実行
+            imageInterval = setInterval(() => {
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    sendImage();
+                } else {
+                    stopImageLoop();
+                }
+            }, intervalMs);
+        }
+
+        function stopImageLoop() {
+            if (imageInterval) {
+                clearInterval(imageInterval);
+                imageInterval = null;
+                console.log("Image loop stopped");
+            }
         }
 
         function sendImage() {

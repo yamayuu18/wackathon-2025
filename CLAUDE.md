@@ -38,6 +38,8 @@
 
 ### 重要な実装詳細
 
+### 重要な実装詳細
+
 **変化検知と無言モード**:
 - **OpenCV差分チェック**: 画像に変化がない場合、APIへの送信をスキップします。
 - **AI変化判定**: 手ブレ等で送信された場合でも、AIが「意味のある変化なし」と判断すれば `has_change=False` を記録し、**発話しません**。
@@ -47,6 +49,8 @@
 - **厳格なペットボトル判定**:
     - キャップ・ラベル・中身がある場合はNG
     - 缶・ビン・燃えるゴミはNG
+- **半二重通話 (Half-Duplex)**:
+    - AI発話中はマイク入力をサーバー側でミュートし、エコーや無限ループを防止 (`is_ai_speaking` フラグ)。
 
 **データベース (AWS DynamoDB)**:
 - サービス: AWS DynamoDB
@@ -54,11 +58,16 @@
 - 構成: Partition Key=`user_id`, Sort Key=`timestamp`
 - **スキーマ詳細**: `doc/database_schema.md` を参照
 
+**ダッシュボード**:
+- エンドポイント: `/dashboard` (HTML), `/api/stats` (JSON)
+- 機能: リアルタイム集計、日別推移、NG理由分析、フラッシュエフェクト
+
 ### 主要コンポーネント
 
 **camera/webapp/** - Webアプリ版
-- `server.py`: バックエンド (FastAPI)
-- `index.html`: フロントエンド (Camera/Audio)
+- `server.py`: バックエンド (FastAPI, WebSocket, API)
+- `index.html`: スマホ用フロントエンド (Camera/Audio)
+- `dashboard.html`: PC用ダッシュボード (Chart.js)
 
 **camera/** - 共通
 - `database.py`: DB操作
@@ -69,7 +78,10 @@
 - `lambda/`: 旧Lambda関数
 
 ### 設定管理
-- `.env`: `OPENAI_API_KEY`, `REALTIME_MODEL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `DYNAMODB_TABLE_NAME`
+- `.env`:
+    - APIキー: `OPENAI_API_KEY`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
+    - 設定: `REALTIME_MODEL`, `AWS_DEFAULT_REGION`, `DYNAMODB_TABLE_NAME`
+    - デモ調整: `IMAGE_INTERVAL`, `DETECTION_DELAY`, `VAD_THRESHOLD`, `USE_MAC_SPEAKER`
 
 ## ハードウェアセットアップ (ゴミ箱内部)
 - **iPhone**: ゴミ箱の蓋の裏側に設置（背面カメラ使用）
