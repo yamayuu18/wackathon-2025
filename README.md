@@ -41,12 +41,13 @@ Wackathon/2025/
 │   │   ├── server.py           # FastAPIサーバー
 │   │   ├── index.html          # フロントエンド (カメラ/マイク)
 │   │   └── dashboard.html      # ダッシュボード (分析画面)
-│   ├── realtime_app.py         # Realtime API クライアント (CLI版)
 │   ├── database.py             # DB操作 (DynamoDB)
-│   └── captured_images/        # 画像保存先
+│   ├── captured_images/        # 画像保存先 (自動作成)
+│   └── captured_audio/         # 音声保存先 (自動作成)
 ├── legacy/                     # 旧アーキテクチャ (S3/Lambda)
 │   ├── camera/                 # 旧カメラ・Voicevoxスクリプト
-│   └── lambda/                 # 旧Lambda関数
+│   ├── lambda/                 # 旧Lambda関数
+│   └── unused/                 # 未使用ファイル (realtime_app.py等)
 ├── doc/
 │   └── system_architecture.md  # システム構成図
 ├── requirements.txt            # 依存ライブラリ
@@ -65,7 +66,17 @@ pip install -r requirements.txt
 
 ### 2. 環境変数 (.env)
 
-プロジェクトルートに `.env` を作成:
+`.env.example` をコピーして `.env` を作成し、必要なキーを入力してください。
+
+```bash
+# Mac/Linux
+cp .env.example .env
+
+# Windows (PowerShell)
+copy .env.example .env
+```
+
+`.env` の内容を編集します:
 
 ```ini
 OPENAI_API_KEY=sk-...
@@ -78,16 +89,36 @@ DYNAMODB_TABLE_NAME=waste_disposal_history
 IMAGE_INTERVAL=10       # 画像送信間隔(秒)
 DETECTION_DELAY=5       # 検知開始までの待機時間(秒)
 VAD_THRESHOLD=0.9       # 音声検知感度(0.0-1.0)
-USE_MAC_SPEAKER=true    # Macのスピーカーを使用するか
+USE_MAC_SPEAKER=true    # サーバー(PC)のスピーカーから音声を再生するか (Windows/Mac対応)
 ```
+
+※ `captured_images` や `captured_audio` ディレクトリは初回実行時に自動作成されます。
 
 ### 3. サーバー起動
 
+**Mac/Linux:**
 ```bash
 python camera/webapp/server.py
 ```
 
+**Windows:**
+```bash
+python camera\webapp\server.py
+```
+※ Windows環境によっては `python` の代わりに `py` コマンドを使用する場合もあります。
+
 ### 4. ngrok起動
+
+**初回のみセットアップが必要です:**
+
+1.  [ngrok公式サイト](https://ngrok.com/)でアカウントを作成します。
+2.  ngrokをインストールします（例: `brew install ngrok/ngrok/ngrok` または公式サイトからダウンロード）。
+3.  ダッシュボードにある Authtoken コマンドを実行して認証します:
+    ```bash
+    ngrok config add-authtoken <YOUR_AUTHTOKEN>
+    ```
+
+**起動コマンド:**
 
 別のターミナルで実行:
 
@@ -95,9 +126,18 @@ python camera/webapp/server.py
 ngrok http 8000
 ```
 
+コマンドを実行すると、以下のような画面が表示されます:
+
+```
+Forwarding                    https://xxxx-xxxx.ngrok-free.app -> http://localhost:8000
+```
+
+この `https://xxxx-xxxx.ngrok-free.app` の部分が、スマホでアクセスするURLです。
+
 ### 5. アクセス
 
-- **スマホ (カメラ)**: ngrokのURL (https://...) を開く
+- **スマホ (カメラ)**: 上記で確認した ngrokのURL (https://...) をiPhoneのSafariで開きます。
+    - **注意**: カメラへのアクセス許可を求められた場合は「許可」を選択してください。
 - **PC (ダッシュボード)**: `http://localhost:8000/dashboard` を開く
 
 ## 旧アーキテクチャ (S3/Lambda)
