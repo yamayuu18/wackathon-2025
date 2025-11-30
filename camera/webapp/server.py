@@ -191,7 +191,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 # 差分チェック
                                 if current_image_cv2 is not None:
                                     prev_cv2 = session_state.get("previous_image_cv2")
-                                    if not is_image_changed(prev_cv2, current_image_cv2, threshold=15.0):
+                                    if not is_image_changed(prev_cv2, current_image_cv2, threshold=30.0):
                                         LOGGER.info("🙈 Skipped sending image (No change detected)")
                                         continue # Skip sending this event to OpenAI
                                     
@@ -391,6 +391,9 @@ async def init_session(ws):
                 "**禁止例:** 「アカンで！キャップついてるやん。記録しとくわ。」（「記録しとくわ」が余計で、文も長い）"
                 "**良い例:** 「アカン、キャップついてるやんけ！」（怒りと理由が1文でまとまっている）"
                 "感情を込めて、語尾を少し伸ばしながら自然にしゃべってください（〜やで、〜やんな、〜やんか など）。"
+                "**重要: 変化がない場合**"
+                "画像に変化がない（`has_change` が False）と判断した場合は、**絶対に発話しないでください。**"
+                "その場合は `log_disposal` を呼び出すだけで、音声によるフィードバックは不要です。"
             ),
             "voice": VOICE,
             "input_audio_format": "pcm16",

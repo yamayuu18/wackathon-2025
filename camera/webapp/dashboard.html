@@ -267,38 +267,52 @@
             }
         }
 
-        /* フラッシュエフェクト */
-        @keyframes flashGreen {
+        /* フラッシュエフェクト (オーバーレイ) */
+        #flash-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 9999;
+            opacity: 0;
+        }
+
+        @keyframes flashGreenAnim {
             0% {
-                background-color: rgba(202, 255, 191, 0.5);
+                background-color: rgba(202, 255, 191, 0.6);
+                opacity: 1;
             }
 
             100% {
-                background-color: var(--base-color);
+                opacity: 0;
             }
         }
 
-        @keyframes flashRed {
+        @keyframes flashRedAnim {
             0% {
-                background-color: rgba(255, 173, 173, 0.5);
+                background-color: rgba(255, 173, 173, 0.6);
+                opacity: 1;
             }
 
             100% {
-                background-color: var(--base-color);
+                opacity: 0;
             }
         }
 
         .flash-ok {
-            animation: flashGreen 1s ease;
+            animation: flashGreenAnim 1s ease-out;
         }
 
         .flash-ng {
-            animation: flashRed 1s ease;
+            animation: flashRedAnim 1s ease-out;
         }
     </style>
 </head>
 
 <body>
+    <div id="flash-overlay"></div>
 
     <header>
         <div>
@@ -508,14 +522,14 @@
                 if (lastTotal > 0 && data.total > lastTotal) {
                     // New record added
                     const latest = data.recent_logs[0];
-                    const body = document.body;
-                    body.classList.remove('flash-ok', 'flash-ng');
-                    void body.offsetWidth; // Trigger reflow
+                    const overlay = document.getElementById('flash-overlay');
+                    overlay.classList.remove('flash-ok', 'flash-ng');
+                    void overlay.offsetWidth; // Trigger reflow
 
                     if (latest && latest.is_valid) {
-                        body.classList.add('flash-ok');
+                        overlay.classList.add('flash-ok');
                     } else {
-                        body.classList.add('flash-ng');
+                        overlay.classList.add('flash-ng');
                     }
                 }
                 lastTotal = data.total;
