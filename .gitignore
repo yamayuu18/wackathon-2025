@@ -11,6 +11,7 @@ ENV/
 # AWS credentials
 .env
 .aws_temp_credentials.json
+*.pem
 
 # Local data
 camera/captured_images/
@@ -36,3 +37,4 @@ lambda/waste_recognition.zip
 
 # Database
 *.db
+doc/AR_INTEGRATION.md
