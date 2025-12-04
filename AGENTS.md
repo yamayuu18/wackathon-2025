@@ -5,7 +5,6 @@
 既存ドキュメントの知見を尊重してください。
 
 ## プロジェクト概要
-## プロジェクト概要
 - **Webアプリ版 (Main)**: iPhone (Safari) からアクセスし、カメラ(Flash/0.5x)とマイクを制御。
 - **Realtime API (GPT-4o-mini)**: 画像・音声をリアルタイムに解析し、音声応答を生成。
 - **ダッシュボード**: PCブラウザでアクセスし、判定結果・統計・ログをリアルタイムに可視化。
@@ -15,10 +14,27 @@
 - **データベース (`camera/database.py`)**: AWS DynamoDB に判定結果と拒否理由を記録。
 - **Legacy**: S3/Lambda構成は `legacy/` に移動。
 
+## ディレクトリ構成
+```
+camera/webapp/
+├── public/              # 静的ファイル（セキュリティのため分離）
+│   ├── index.html       # スマホ用UI
+│   └── dashboard.html   # PC用ダッシュボード
+└── server.py            # バックエンド
+```
+
+## セキュリティガイドライン
+1. **WebSocket認証**: `WS_AUTH_TOKEN` によるトークン認証を使用。未設定時は起動時に自動生成。
+2. **静的ファイル分離**: `public/` ディレクトリ外のファイルは配信しない。
+3. **入力検証**: Base64サイズ制限（10MB）、パストラバーサル防止。
+4. **並行処理安全**: `asyncio.Lock` による状態アクセス保護。
+5. **Function Call冪等性**: 重複呼び出しのチェック機構。
+6. **再接続制御**: 指数バックオフ（1秒〜60秒、最大10回）。
+
 ## 共通ルール
 1. 変更前に `README.md` と `CLAUDE.md` を確認し、既存の意図やスタイルを踏襲する。
 2. Python コードは PEP 8 / 型ヒント / Google Docstring（`CLAUDE.md` 参照）を守る。
-3. 開発中は `pip install -r requirements.txt` で依存関係を揃え、`cd camera && python camera_capture.py` で挙動確認する。
+3. 開発中は `pip install -r requirements.txt` で依存関係を揃え、`python camera/webapp/server.py` で挙動確認する。
 4. AWS 連携 (DynamoDB) は実装済み。Rekognition等は未実装。
 5. 機密データ（画像、AWS キー等）はリポジトリに含めない。環境変数または `.env` の利用を明示する。
 6. **【重要】指示の厳守**: ユーザーから明示的な指示がない限り、たとえ良かれと思っても機能の追加や変更を勝手に行わない。「提案」と「実装」を明確に分け、実装前に必ず許可を得る。

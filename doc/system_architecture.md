@@ -14,7 +14,7 @@ graph TD
         Mic["マイク"]
         Speaker["スピーカー"]
         Flash["フラッシュ/ライト"]
-        
+
         Browser -->|制御| Camera
         Browser -->|制御| Flash
         Camera -->|映像ストリーム| Browser
@@ -26,22 +26,29 @@ graph TD
     end
 
     subgraph Server
+        Auth["認証レイヤー (WS_AUTH_TOKEN)"]
         FastAPI["server.py (FastAPI)"]
+        Static["public/ (静的ファイル)"]
         FileSystem["ローカル保存 (画像)"]
-        
+
+        Auth -->|検証OK| FastAPI
+        FastAPI -->|配信| Static
         FastAPI -->|保存| FileSystem
     end
 
     subgraph Cloud
         RealtimeAPI["Realtime API (GPT-4o mini)"]
         DynamoDB["AWS DynamoDB"]
-        
+
         FastAPI -->|記録| DynamoDB
     end
 
+    %% 認証フロー
+    Browser -- "0. /config でトークン取得" --> FastAPI
+    Browser ---|WebSocket + token| Ngrok
+    Ngrok ---|WebSocket| Auth
+
     %% データフロー
-    Browser ---|WebSocket: 音声/画像/イベント| Ngrok
-    Ngrok ---|WebSocket| FastAPI
     FastAPI ---|WebSocket: リレー| RealtimeAPI
 
     %% 詳細なやり取り
@@ -59,14 +66,16 @@ graph TD
 ## 主要コンポーネント
 
 1.  **フロントエンド (iPhone/Safari)**
-    *   **ファイル**: `index.html`
+    *   **ファイル**: `camera/webapp/public/index.html`
     *   **役割**: カメラ映像・音声の取得、ハードウェア制御（フラッシュ、ズーム）、ユーザーインターフェース。
     *   **通信**: ngrokが提供するHTTPS経由でバックエンドとWebSocket通信を行います。
+    *   **認証**: `/config` エンドポイントからトークンを取得し、WebSocket接続時に使用。
 
 2.  **バックエンド (Mac)**
-    *   **ファイル**: `server.py`
+    *   **ファイル**: `camera/webapp/server.py`
     *   **役割**: リレーサーバーとして機能。iPhoneからのメディアを受け取り、検証用に画像を保存し、OpenAIへ転送します。また、OpenAIからの応答をiPhoneへ返します。
     *   **フレームワーク**: FastAPI + Uvicorn
+    *   **静的ファイル**: `camera/webapp/public/` ディレクトリから配信（セキュリティのため分離）
 
 3.  **AIエンジン (OpenAI)**
     *   **サービス**: OpenAI Realtime API (Beta)
@@ -94,3 +103,24 @@ graph TD
     *   廃棄イベントを検知すると、OpenAIは `log_disposal` 関数を呼び出します。
     *   サーバーは結果をDynamoDBに記録します。
     *   OpenAIは音声応答（例：「ラベル剥がしてや！」）を生成し、ユーザーに返します。
+
+## セキュリティ機能
+
+1.  **WebSocket認証**
+    *   トークンベース認証（`WS_AUTH_TOKEN` 環境変数）
+    *   未設定時は起動時に自動生成（ログに出力）
+    *   クライアントは `/config` からトークンを取得
+
+2.  **入力検証**
+    *   Base64サイズ制限: 10MB
+    *   パストラバーサル防止: `sanitize_item_id()`
+    *   JSONパースエラーハンドリング
+
+3.  **並行処理安全**
+    *   `SpeakingState` クラスによるAI発話状態管理
+    *   `session_state_lock` による状態アクセス保護
+    *   Function Call冪等性チェック
+
+4.  **再接続制御**
+    *   指数バックオフ（1秒〜60秒、最大10回）
+    *   接続失敗時の自動リトライ

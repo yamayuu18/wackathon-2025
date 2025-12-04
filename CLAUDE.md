@@ -5,85 +5,136 @@
 ## ビルド/実行/テスト コマンド
 
 ### 環境セットアップ
-- 依存関係のインストール: `pip install -r requirements.txt` (または `pip install opencv-python numpy ...`)
-- 仮想環境の作成: `uv venv` または `python -m venv .venv`
-- 環境のアクティベート: `source .venv/bin/activate`
+```bash
+# 仮想環境の作成
+uv venv
+# または
+python -m venv .venv
 
-### ローカル実行 (Webアプリ版 - Current)
-1. **サーバー起動**:
-   - 実行: `python camera/webapp/server.py`
-   - 役割: FastAPIサーバー起動、OpenAI Realtime API 接続
-2. **ngrok起動**:
-   - 実行: `ngrok http 8000`
-   - 役割: 外部公開 (HTTPS)
-3. **iPhoneアクセス**:
-   - ngrokのURLを開く
+# 環境のアクティベート
+source .venv/bin/activate
 
-### ローカル実行 (Legacy S3/Lambda)
-1. **Webサーバー & 音声再生**: `python legacy/camera/app.py`
-2. **カメラ & S3 アップロード**: `python legacy/camera/camera_to_s3_mfa.py`
+# 依存関係のインストール
+pip install -r requirements.txt
+```
 
-### Lambda デプロイ & テスト
-- **デプロイ手順**: `legacy/lambda/deploy_lambda.md` を参照してください。
+### ローカル実行 (Webアプリ版)
+```bash
+# 1. サーバー起動
+python camera/webapp/server.py
 
-## システムアーキテクチャ (Webアプリ版)
+# 2. ngrok起動（別ターミナル）
+ngrok http 8000
 
-### ハイレベル・アーキテクチャフロー
-1. **iPhone (Safari)** → カメラ映像・音声をWebSocketで送信
-2. **ngrok** → HTTPSトンネリング
-3. **Mac (server.py)** → 画像保存、OpenAIへのリレー
-4. **OpenAI Realtime API** → 画像解析・音声生成 (`gpt-4o-mini`)
-5. **Mac (server.py)** → 音声データ受信、ブラウザへ転送
-6. **iPhone (Safari)** → 音声再生
+# 3. iPhoneからngrokのURLにアクセス
+```
 
-### 重要な実装詳細
+### Legacy (S3/Lambda)
+- `legacy/` フォルダに移動済み
+- 詳細: `legacy/lambda/deploy_lambda.md`
 
-### 重要な実装詳細
+## システムアーキテクチャ
 
-**変化検知と無言モード**:
-- **OpenCV差分チェック**: 画像に変化がない場合、APIへの送信をスキップします。
-- **AI変化判定**: 手ブレ等で送信された場合でも、AIが「意味のある変化なし」と判断すれば `has_change=False` を記録し、**発話しません**。
-
-**ゴミ分別・判定ロジック (OpenAI)**:
-- モデル: `gpt-4o-mini` (Realtime API)
-- **厳格なペットボトル判定**:
-    - キャップ・ラベル・中身がある場合はNG
-    - 缶・ビン・燃えるゴミはNG
-- **半二重通話 (Half-Duplex)**:
-    - AI発話中はマイク入力をサーバー側でミュートし、エコーや無限ループを防止 (`is_ai_speaking` フラグ)。
-
-**データベース (AWS DynamoDB)**:
-- サービス: AWS DynamoDB
-- テーブル名: `waste_disposal_history` (環境変数で指定可)
-- 構成: Partition Key=`user_id`, Sort Key=`timestamp`
-- **スキーマ詳細**: `doc/database_schema.md` を参照
-
-**ダッシュボード**:
-- エンドポイント: `/dashboard` (HTML), `/api/stats` (JSON)
-- 機能: リアルタイム集計、日別推移、NG理由分析、フラッシュエフェクト
+### データフロー
+```
+iPhone (Safari) → ngrok → Mac (server.py) → OpenAI Realtime API
+                                         → AWS DynamoDB
+```
 
 ### 主要コンポーネント
 
-**camera/webapp/** - Webアプリ版
-- `server.py`: バックエンド (FastAPI, WebSocket, API)
-- `index.html`: スマホ用フロントエンド (Camera/Audio)
-- `dashboard.html`: PC用ダッシュボード (Chart.js)
+| コンポーネント | ファイル | 役割 |
+|--------------|---------|------|
+| バックエンド | `camera/webapp/server.py` | FastAPI + WebSocketリレー |
+| フロントエンド | `camera/webapp/public/index.html` | カメラ/マイク制御 |
+| ダッシュボード | `camera/webapp/public/dashboard.html` | 統計表示 |
+| DB操作 | `camera/database.py` | DynamoDB CRUD |
 
-**camera/** - 共通
-- `database.py`: DB操作
-- `realtime_app.py`: Realtime API クライアント (CLI版)
+### ディレクトリ構成
+```
+camera/webapp/
+├── public/              # 静的ファイル（セキュリティのため分離）
+│   ├── index.html       # スマホ用UI
+│   └── dashboard.html   # PC用ダッシュボード
+└── server.py            # バックエンド
+```
 
-**legacy/** - 旧アーキテクチャ
-- `camera/`: 旧カメラ・Voicevoxスクリプト
-- `lambda/`: 旧Lambda関数
+## セキュリティ機能
 
-### 設定管理
-- `.env`:
-    - APIキー: `OPENAI_API_KEY`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
-    - 設定: `REALTIME_MODEL`, `AWS_DEFAULT_REGION`, `DYNAMODB_TABLE_NAME`
-    - デモ調整: `IMAGE_INTERVAL`, `DETECTION_DELAY`, `VAD_THRESHOLD`, `USE_MAC_SPEAKER`
+### WebSocket認証
+- トークンベース認証（`WS_AUTH_TOKEN`）
+- 未設定時は起動時に自動生成（ログに出力）
 
-## ハードウェアセットアップ (ゴミ箱内部)
-- **iPhone**: ゴミ箱の蓋の裏側に設置（背面カメラ使用）
-- **照明**: LEDライト推奨（フラッシュも利用可能）
+### 入力検証
+- Base64サイズ制限: 10MB
+- パストラバーサル防止: `sanitize_item_id()`
+- JSONパースエラーハンドリング
 
+### 並行処理安全
+- `SpeakingState` クラスによるAI発話状態管理
+- `session_state_lock` による状態アクセス保護
+- Function Call冪等性チェック
+
+### 再接続
+- 指数バックオフ（1秒〜60秒、最大10回）
+
+## 環境変数 (.env)
+
+```bash
+# 必須
+OPENAI_API_KEY=sk-...
+
+# AWS
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_DEFAULT_REGION=ap-northeast-1
+DYNAMODB_TABLE_NAME=waste_disposal_history
+
+# オプション
+WS_AUTH_TOKEN=your_secure_token    # 未設定時は自動生成
+REALTIME_MODEL=gpt-4o-mini-realtime-preview
+REALTIME_VOICE=verse
+AUDIO_ENDPOINT=camera              # camera または ar
+
+# デモ調整
+IMAGE_INTERVAL=3                   # 画像送信間隔(秒)
+DETECTION_DELAY=5                  # 検知開始待機(秒)
+VAD_THRESHOLD=0.9                  # 音声検知感度
+USE_MAC_SPEAKER=true               # PCスピーカー出力
+```
+
+## 判定ロジック
+
+### 二段階変化検知
+1. **OpenCV差分チェック**: 閾値30以下 → APIスキップ
+2. **AI判断**: 手ブレのみ → `has_change=False` → 沈黙
+
+### ペットボトル判定
+- **OK**: キャップなし・ラベルなし・中身なし
+- **NG**: 上記以外（缶、ビン、燃えるゴミ含む）
+
+### 半二重通話
+- AI発話中はマイク入力をミュート
+- エコー/無限ループ防止
+
+## コードスタイル
+
+- **Python**: PEP 8 + 型ヒント
+- **Docstring**: Google style
+- **命名**: snake_case (変数/関数), PascalCase (クラス), UPPER_CASE (定数)
+- **ログ**: `logging` モジュール使用、`exc_info=True` で詳細出力
+
+## APIエンドポイント
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/` | index.html |
+| GET | `/config` | 設定値 + WebSocketトークン |
+| GET | `/dashboard` | ダッシュボード |
+| GET | `/api/stats` | 統計JSON |
+| WS | `/ws?role=camera&token=xxx` | WebSocket接続 |
+
+## ハードウェア
+
+- **iPhone**: ゴミ箱蓋裏に設置（背面カメラ使用）
+- **照明**: LEDライト推奨（フラッシュも可）

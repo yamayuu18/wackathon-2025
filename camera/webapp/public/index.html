@@ -98,13 +98,73 @@
             text-align: center;
             font-size: 14px;
             color: #888;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* ステータスインジケーター */
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-indicator.connected {
+            background: #4CD964;
+        }
+
+        .status-indicator.disconnected {
+            background: #FF3B30;
+        }
+
+        .status-indicator.connecting {
+            background: #FFCC00;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* トースト通知 */
+        .toast {
+            position: fixed;
+            bottom: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            padding: 12px 24px;
+            border-radius: 8px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            z-index: 1000;
+            max-width: 80%;
+            text-align: center;
+        }
+
+        .toast.show {
+            opacity: 1;
+        }
+
+        .toast.error {
+            background: rgba(255, 59, 48, 0.9);
+        }
+
+        .toast.success {
+            background: rgba(76, 217, 100, 0.9);
         }
     </style>
 </head>
 
 <body>
+    <div id="toast" class="toast"></div>
     <div id="controls">
-        <div id="status">未接続</div>
+        <div id="status"><span class="status-indicator disconnected"></span>未接続</div>
 
         <div class="row">
             <select id="camera-select">
@@ -139,6 +199,44 @@
         let audioWorkletNode = null;
         let track = null; // Video track for flash control
         let imageInterval = null; // Interval ID for image loop
+        let wsToken = null; // WebSocket認証トークン
+
+        // カメララベルを日本語化
+        function formatCameraLabel(label) {
+            if (!label) return null;
+            const lower = label.toLowerCase();
+
+            // iOS 日本語ラベル対応
+            if (label.includes('背面超広角')) return '🔍 超広角 (0.5x)';
+            if (label.includes('背面デュアル広角')) return '📷 背面広角';
+            if (label.includes('背面カメラ')) return '📷 背面';
+            if (label.includes('前面カメラ')) return '🤳 前面';
+            if (label.includes('前面')) return '🤳 前面';
+            if (label.includes('背面')) return '📷 背面広角';
+
+            // 英語ラベル対応
+            if (lower.includes('ultra wide') || lower.includes('0.5')) return '🔍 超広角 (0.5x)';
+            if (lower.includes('telephoto')) return '🔭 望遠';
+            if (lower.includes('front')) return '🤳 前面';
+            if (lower.includes('back') || lower.includes('rear')) return '📷 背面広角';
+
+            return label; // マッチしない場合は元のラベルを返す
+        }
+
+        // ステータス表示更新
+        function updateStatus(text, state) {
+            const indicator = state === 'connected' ? 'connected' :
+                              state === 'connecting' ? 'connecting' : 'disconnected';
+            statusDiv.innerHTML = `<span class="status-indicator ${indicator}"></span>${text}`;
+        }
+
+        // トースト通知
+        function showToast(message, type = 'info', duration = 3000) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast ' + type + ' show';
+            setTimeout(() => { toast.classList.remove('show'); }, duration);
+        }
 
         // カメラ一覧取得
         async function getCameras() {
@@ -152,7 +250,13 @@
                 videoDevices.forEach(device => {
                     const option = document.createElement('option');
                     option.value = device.deviceId;
-                    option.text = device.label || `Camera ${cameraSelect.length}`;
+                    // デバッグ用: 元のラベルも表示
+                    const formatted = formatCameraLabel(device.label);
+                    if (formatted && formatted !== device.label) {
+                        option.text = `${formatted} (${device.label})`;
+                    } else {
+                        option.text = device.label || `カメラ ${cameraSelect.length}`;
+                    }
                     cameraSelect.appendChild(option);
                 });
 
@@ -167,7 +271,8 @@
 
             } catch (err) {
                 console.error('Error getting cameras:', err);
-                statusDiv.textContent = 'カメラ権限エラー: ' + err.message;
+                updateStatus('カメラ権限エラー', 'disconnected');
+                showToast('カメラへのアクセスを許可してください', 'error');
             }
         }
 
@@ -208,16 +313,17 @@
                 // torch または fillLightMode をチェック
                 if (capabilities.torch || capabilities.fillLightMode) {
                     flashBtn.disabled = false;
-                    statusDiv.textContent = 'フラッシュ使用可能';
+                    updateStatus('フラッシュ使用可能', 'disconnected');
                 } else {
                     flashBtn.disabled = true;
-                    statusDiv.textContent = 'このカメラはフラッシュ非対応です';
+                    updateStatus('フラッシュ非対応', 'disconnected');
                 }
 
                 return stream;
             } catch (err) {
                 console.error('Error starting camera:', err);
-                statusDiv.textContent = 'カメラ起動エラー: ' + err.message;
+                updateStatus('カメラ起動エラー', 'disconnected');
+                showToast('カメラを起動できませんでした', 'error');
                 return null;
             }
         }
@@ -244,7 +350,7 @@
                     flashBtn.classList.toggle('active', isFlashOn);
                 } catch (err2) {
                     console.error('FillLightMode error:', err2);
-                    statusDiv.textContent = 'フラッシュ制御エラー: ' + err.message;
+                    showToast('フラッシュを制御できませんでした', 'error');
                     isFlashOn = !isFlashOn; // 失敗したら状態を戻す
                 }
             }
@@ -271,12 +377,25 @@
 
             if (!stream) return;
 
-            // WebSocket接続
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+            // 認証トークンを取得
+            try {
+                const configRes = await fetch('/config');
+                const configData = await configRes.json();
+                wsToken = configData.ws_token;
+            } catch (e) {
+                console.error("Failed to get auth token:", e);
+                updateStatus('認証エラー', 'disconnected');
+                showToast('サーバーに接続できません', 'error');
+                return;
+            }
+
+            // WebSocket接続（固定のngrokドメイン + role=camera + token）
+            const wsUrl = `wss://chase-unpatient-denice.ngrok-free.dev/ws?role=camera&token=${wsToken}`;
+            ws = new WebSocket(wsUrl);
 
             ws.onopen = async () => {
-                statusDiv.textContent = '接続完了';
+                updateStatus('接続完了', 'connected');
+                showToast('サーバーに接続しました', 'success');
                 connectBtn.textContent = '切断';
                 connectBtn.classList.add('recording');
                 detectBtn.disabled = false; // 検知ボタン有効化
@@ -293,7 +412,7 @@
             };
 
             ws.onclose = () => {
-                statusDiv.textContent = '切断されました';
+                updateStatus('切断されました', 'disconnected');
                 connectBtn.textContent = '接続開始';
                 connectBtn.classList.remove('recording');
                 detectBtn.disabled = true;

@@ -24,7 +24,8 @@ class Database:
                       image_path: str, 
                       result_json: Dict[str, Any], 
                       user_id: Optional[str] = "webapp_user",
-                      rejection_reason: Optional[str] = None):
+                      rejection_reason: Optional[str] = None,
+                      timestamp: Optional[str] = None):
         """Insert a new disposal record into DynamoDB."""
         
         # Extract relevant fields
@@ -33,7 +34,8 @@ class Database:
         detected_items = result_json.get("detected_items", [])
         
         # Timestamp for Sort Key
-        timestamp = datetime.now().isoformat()
+        if not timestamp:
+            timestamp = datetime.now().isoformat()
         
         item = {
             'user_id': user_id,              # Partition Key
@@ -56,6 +58,23 @@ class Database:
             print(f"✅ DynamoDBに記録しました: {user_id} - {timestamp}")
         except Exception as e:
             print(f"❌ DynamoDB保存エラー: {e}")
+
+    def update_record_message(self, user_id: str, timestamp: str, new_message: str):
+        """Update the message of an existing record."""
+        try:
+            self.table.update_item(
+                Key={
+                    'user_id': user_id,
+                    'timestamp': timestamp
+                },
+                UpdateExpression="set message = :m",
+                ExpressionAttributeValues={
+                    ':m': new_message
+                }
+            )
+            print(f"✅ DynamoDBメッセージ更新: {timestamp} -> {new_message}")
+        except Exception as e:
+            print(f"❌ DynamoDB更新エラー: {e}")
 
     def get_recent_records(self, user_id: str = "webapp_user", limit: int = 10):
         """Fetch recent records for a user."""
