@@ -445,10 +445,7 @@
                     </div>
                     <div class="chart-wrapper">
                         <canvas id="pieChart"></canvas>
-                        <div class="pie-center-text">
-                            <div class="pie-center-value" id="approval-rate">--%</div>
-                            <div class="pie-center-label">合格率</div>
-                        </div>
+
                     </div>
                 </div>
 
@@ -669,14 +666,7 @@
                 pieChart.data.datasets[0].data = [data.ok, data.ng];
                 pieChart.update();
 
-                // Update Approval Rate Display
-                const approvalRateEl = document.getElementById('approval-rate');
-                if (data.total > 0) {
-                    const rate = ((data.ok / data.total) * 100).toFixed(1);
-                    approvalRateEl.textContent = rate + '%';
-                } else {
-                    approvalRateEl.textContent = '--%';
-                }
+
 
                 // Update Reasons Chart
                 const sortedReasons = Object.entries(data.reasons).sort((a, b) => b[1] - a[1]);
