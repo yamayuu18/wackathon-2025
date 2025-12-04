@@ -357,6 +357,10 @@ class RelayHub:
             self.np = np
 
         await websocket.accept()
+        # ログ出力時にトークンを隠蔽
+        token = websocket.query_params.get("token")
+        masked_query = str(websocket.query_params).replace(token, "***") if token else str(websocket.query_params)
+        LOGGER.info("WebSocket connection request: %s %s", websocket.url.path, masked_query)
         LOGGER.info("Client connected: %s (role=%s)", websocket.client, role)
         await self.register_client(role, websocket)
 
