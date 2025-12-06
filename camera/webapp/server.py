@@ -26,6 +26,7 @@ from websockets.asyncio.client import connect
 # 親ディレクトリのモジュールをインポートできるようにパスを追加
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database import Database
+from obniz import Obniz
 
 # =============================================================================
 # 定数定義
@@ -121,6 +122,10 @@ if AUDIO_ENDPOINT not in {"camera", "ar"}:
 DETECTION_DELAY = safe_int(os.getenv("DETECTION_DELAY"), 5)
 IMAGE_INTERVAL = safe_int(os.getenv("IMAGE_INTERVAL"), 15)
 VAD_THRESHOLD = safe_float(os.getenv("VAD_THRESHOLD"), 0.9)
+
+# Obniz設定
+OBNIZ_ID = os.getenv("OBNIZ_ID")
+SERVO_RESET_DELAY = safe_int(os.getenv("SERVO_RESET_DELAY"), 3)
 
 if not OPENAI_API_KEY:
     LOGGER.error("OPENAI_API_KEY is not set")
@@ -316,6 +321,48 @@ class RelayHub:
         self.reconnect_attempts = 0
         # OpenAI接続状態フラグ
         self.openai_connected = False
+
+        # Obniz初期化
+        self.obniz = None
+        if OBNIZ_ID:
+            try:
+                self.obniz = Obniz(OBNIZ_ID)
+                self.obniz.onconnect = self._on_obniz_connect
+                LOGGER.info("Obniz initialized with ID: %s", OBNIZ_ID)
+            except Exception as e:
+                LOGGER.error("Failed to initialize Obniz: %s", e)
+
+    def _on_obniz_connect(self, obniz):
+        LOGGER.info("Obniz connected")
+        # 初期位置へ
+        obniz.wired("ServoMotor", {"signal": 0, "vcc": 1, "gnd": 2}).angle(90)
+
+    async def control_servo(self, angle: int):
+        """サーボモーターを制御し、一定時間後にリセット"""
+        if not self.obniz:
+            return
+
+        try:
+            LOGGER.info("Moving servo to %d degrees", angle)
+            # Obnizの操作は同期的なので、executorで実行するか、軽量ならそのまま呼ぶ
+            # ここでは簡易的に直接呼び出す（ライブラリの実装依存だが、通常はWebSocket送信のみ）
+            servo = self.obniz.wired("ServoMotor", {"signal": 0, "vcc": 1, "gnd": 2})
+            servo.angle(angle)
+
+            # リセットタスク
+            if angle != 90:
+                asyncio.create_task(self._reset_servo_later())
+        except Exception as e:
+            LOGGER.error("Servo control failed: %s", e)
+
+    async def _reset_servo_later(self):
+        await asyncio.sleep(SERVO_RESET_DELAY)
+        try:
+            LOGGER.info("Resetting servo to 90 degrees")
+            servo = self.obniz.wired("ServoMotor", {"signal": 0, "vcc": 1, "gnd": 2})
+            servo.angle(90)
+        except Exception as e:
+            LOGGER.error("Servo reset failed: %s", e)
 
     async def ensure_openai_task(self):
         current_loop = asyncio.get_running_loop()
@@ -1041,6 +1088,11 @@ async def handle_function_call(event, ws, session_state: dict, session_state_loc
             }
             LOGGER.info("Judgment Result: %s", json.dumps(log_data, ensure_ascii=False))
             LOGGER.info("DB saved image_path=%s user_id=%s", image_path, "webapp_user")
+
+            # Obnizサーボ制御
+            if has_change:
+                target_angle = 0 if log_data["result"] == "OK" else 180
+                await hub.control_servo(target_angle)
 
             # 判定時刻を更新
             async with session_state_lock:

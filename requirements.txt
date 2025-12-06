@@ -21,3 +21,4 @@ fastapi
 uvicorn
 python-multipart
 pyaudio
+obniz
