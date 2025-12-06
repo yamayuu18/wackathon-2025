@@ -50,13 +50,20 @@ Wackathon/2025/
 ### 1. 環境構築
 
 ```bash
-# 仮想環境
-python -m venv .venv
-source .venv/bin/activate
+### 1. 環境構築
 
-# 依存関係
+```bash
+# 1. 仮想環境 (Python)
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
+
+# 2. Node.js (Obniz用)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+npm install obniz
 ```
+
 
 ### 2. 環境変数
 

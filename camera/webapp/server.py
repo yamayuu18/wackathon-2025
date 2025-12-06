@@ -26,7 +26,8 @@ from websockets.asyncio.client import connect
 # 親ディレクトリのモジュールをインポートできるようにパスを追加
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database import Database
-from obniz import Obniz
+import subprocess
+import shutil
 
 # =============================================================================
 # 定数定義
@@ -322,32 +323,43 @@ class RelayHub:
         # OpenAI接続状態フラグ
         self.openai_connected = False
 
-        # Obniz初期化
-        self.obniz = None
+        # Obniz初期化 (Node.js Bridge)
+        self.obniz_process = None
         if OBNIZ_ID:
-            try:
-                self.obniz = Obniz(OBNIZ_ID)
-                self.obniz.onconnect = self._on_obniz_connect
-                LOGGER.info("Obniz initialized with ID: %s", OBNIZ_ID)
-            except Exception as e:
-                LOGGER.error("Failed to initialize Obniz: %s", e)
+            node_path = shutil.which("node")
+            if node_path:
+                try:
+                    bridge_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "obniz_bridge.js")
+                    self.obniz_process = subprocess.Popen(
+                        [node_path, bridge_script, OBNIZ_ID],
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        bufsize=1
+                    )
+                    LOGGER.info("Obniz bridge started: PID=%s", self.obniz_process.pid)
+                    # output reading could be done in a separate thread if needed for debugging
+                except Exception as e:
+                    LOGGER.error("Failed to start Obniz bridge: %s", e)
+            else:
+                LOGGER.error("Node.js not found. Obniz disabled.")
 
     def _on_obniz_connect(self, obniz):
-        LOGGER.info("Obniz connected")
-        # 初期位置へ
-        obniz.wired("ServoMotor", {"signal": 0, "vcc": 1, "gnd": 2}).angle(90)
+        # Python版コールバックは廃止
+        pass
 
     async def control_servo(self, angle: int):
-        """サーボモーターを制御し、一定時間後にリセット"""
-        if not self.obniz:
+        """サーボモーターを制御し、一定時間後にリセット (Node.js経由)"""
+        if not self.obniz_process or self.obniz_process.poll() is not None:
+            LOGGER.warning("Obniz bridge is not running")
             return
 
         try:
-            LOGGER.info("Moving servo to %d degrees", angle)
-            # Obnizの操作は同期的なので、executorで実行するか、軽量ならそのまま呼ぶ
-            # ここでは簡易的に直接呼び出す（ライブラリの実装依存だが、通常はWebSocket送信のみ）
-            servo = self.obniz.wired("ServoMotor", {"signal": 0, "vcc": 1, "gnd": 2})
-            servo.angle(angle)
+            LOGGER.info("Sending servo command: %d degrees", angle)
+            command = json.dumps({"angle": angle}) + "\n"
+            self.obniz_process.stdin.write(command)
+            self.obniz_process.stdin.flush()
 
             # リセットタスク
             if angle != 90:
@@ -359,8 +371,10 @@ class RelayHub:
         await asyncio.sleep(SERVO_RESET_DELAY)
         try:
             LOGGER.info("Resetting servo to 90 degrees")
-            servo = self.obniz.wired("ServoMotor", {"signal": 0, "vcc": 1, "gnd": 2})
-            servo.angle(90)
+            if self.obniz_process and self.obniz_process.poll() is None:
+                command = json.dumps({"angle": 90}) + "\n"
+                self.obniz_process.stdin.write(command)
+                self.obniz_process.stdin.flush()
         except Exception as e:
             LOGGER.error("Servo reset failed: %s", e)
 
