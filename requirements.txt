@@ -16,7 +16,7 @@ Flask==3.0.0
 requests==2.31.0
 
 # Realtime API & Web App
-websockets
+websockets>=13.0
 fastapi
 uvicorn
 python-multipart
