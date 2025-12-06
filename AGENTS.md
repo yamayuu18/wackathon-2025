@@ -35,7 +35,7 @@ camera/webapp/
 1. 変更前に `README.md` と `CLAUDE.md` を確認し、既存の意図やスタイルを踏襲する。
 2. Python コードは PEP 8 / 型ヒント / Google Docstring（`CLAUDE.md` 参照）を守る。
 3. 開発中は `pip install -r requirements.txt` で依存関係を揃え、`python camera/webapp/server.py` で挙動確認する。
-4. AWS 連携 (DynamoDB) は実装済み。Rekognition等は未実装。
+4. **実装完了**: AWS DynamoDB連携、OpenAI Realtime API連携、Obniz制御。
 5. 機密データ（画像、AWS キー等）はリポジトリに含めない。環境変数または `.env` の利用を明示する。
 6. **【重要】指示の厳守**: ユーザーから明示的な指示がない限り、たとえ良かれと思っても機能の追加や変更を勝手に行わない。「提案」と「実装」を明確に分け、実装前に必ず許可を得る。
 
