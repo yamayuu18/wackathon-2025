@@ -39,3 +39,4 @@ lambda/waste_recognition.zip
 *.db
 doc/AR_INTEGRATION.md
 doc/UPDATE_PROCEDURE.md
+doc/DEPLOY_AWS.md
