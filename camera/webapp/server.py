@@ -12,12 +12,15 @@ import os
 import re
 import struct
 import sys
-import atexit
+import struct
+import sys
+# import atexit removed
 from functools import partial
 from collections import OrderedDict
 from typing import Any, Dict, Optional
 import threading
 
+from contextlib import asynccontextmanager
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -93,8 +96,21 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 LOGGER = logging.getLogger("webapp")
+hub: Optional['RelayHub'] = None
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 起動時
+    global hub
+    hub = RelayHub()
+    LOGGER.info("RelayHub initialized")
+    yield
+    # 終了時
+    if hub:
+        hub.cleanup()
+        LOGGER.info("RelayHub cleaned up")
+
+app = FastAPI(lifespan=lifespan)
 
 # 静的ファイルの提供 (publicディレクトリのみ)
 static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "public")
@@ -884,8 +900,10 @@ class RelayHub:
                 LOGGER.error("Failed to terminate Obniz bridge: %s", e)
 
 
-hub = RelayHub()
-atexit.register(hub.cleanup)
+
+# hub = RelayHub()  <-- Removed global instantiation
+# atexit.register(hub.cleanup) <-- Removed atexit register, handled by lifespan
+
 
 
 @app.websocket("/ws")
