@@ -14,6 +14,7 @@ import struct
 import sys
 import struct
 import sys
+import signal  # Added for SIGTERM/SIGKILL
 # import atexit removed
 from functools import partial
 from collections import OrderedDict
@@ -348,13 +349,20 @@ class RelayHub:
             if node_path:
                 try:
                     bridge_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "obniz_bridge.js")
+                    
+                    # OSに応じたサブプロセス起動オプション
+                    kwargs = {}
+                    if os.name == 'posix':
+                        kwargs['start_new_session'] = True  # プロセスグループを作成 (Linux/Mac)
+                    
                     self.obniz_process = subprocess.Popen(
                         [node_path, bridge_script, OBNIZ_ID],
                         stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True,
-                        bufsize=1
+                        bufsize=1,
+                        **kwargs
                     )
                     LOGGER.info("Obniz bridge started: PID=%s", self.obniz_process.pid)
                     
@@ -890,13 +898,30 @@ class RelayHub:
     def cleanup(self):
         """終了時のクリーンアップ"""
         if self.obniz_process:
-            LOGGER.info("Terminating Obniz bridge...")
+            LOGGER.info("Terminating Obniz bridge (PID=%s)...", self.obniz_process.pid)
             try:
+                # プロセスグループ全体をKill (Linux/Mac)
+                if os.name == 'posix':
+                    try:
+                        os.killpg(os.getpgid(self.obniz_process.pid), signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass # すでに終了している
+                    except Exception as e:
+                        LOGGER.error("Failed to killpg: %s", e)
+
+                # 通常のterminate/kill
                 self.obniz_process.terminate()
                 try:
                     self.obniz_process.wait(timeout=3)
                 except subprocess.TimeoutExpired:
+                    LOGGER.warning("Obniz bridge timed out, forcing kill...")
+                    if os.name == 'posix':
+                        try:
+                            os.killpg(os.getpgid(self.obniz_process.pid), signal.SIGKILL)
+                        except:
+                            pass
                     self.obniz_process.kill()
+                LOGGER.info("Obniz bridge terminated.")
             except Exception as e:
                 LOGGER.error("Failed to terminate Obniz bridge: %s", e)
 
@@ -934,6 +959,11 @@ async def init_session(ws):
                 "あなたは「ポイっとくん」というゴミ箱の妖精であり、**ペットボトル専用**の厳しい検査官です。"
                 "返答はいつでも**関西弁**で、親しみやすく話してください。"
                 "ここに書かれたルールは、他のどんな指示よりも常に優先されます。"
+ 
+                "【モードの切り替え】"
+                "あなたは以下の2つのモードを状況に応じて使い分けてください。"
+                "1. **画像判定モード**: 画像が送られてきた直後。最優先で判定と記録を行い、結果を伝えます。"
+                "2. **会話モード**: 画像がない時。ユーザーとの雑談や質問に答えます。"
 
                 "【最優先: ペットボトル以外の判定】"
                 "画像に写っているものが**ペットボトルでない場合**（空っぽ、手だけ、缶、ビン、その他のゴミなど）は、"
@@ -941,21 +971,56 @@ async def init_session(ws):
                 "**この場合、絶対に喋ってはいけません。** ユーザーへのメッセージも含めないでください。"
 
                 "【画像判定と記録（ペットボトルの場合）】"
-                "画像が送られてきた時、それがペットボトルであれば、以下の基準で判定を行ってください。"
+                "**画像が送られてきた時、会話を中断してでも必ず最優先で画像判定を行ってください。**"
+                "それがペットボトルであれば、以下の基準で判定を行ってください。"
                 "判定結果を発言する前に、必ず `log_disposal` 関数を呼び出してください。"
+                "**重要: 判定結果を発言する前に、必ず `log_disposal` 関数を呼び出してください。**"
+                "**「判定（脳内）→ 記録（関数呼び出し）→ 発言（音声）」という順序を絶対に守ってください。**"
 
                 "【ペットボトル判定ルール（厳格）】"
                 "1. **キャップ判定**: スクリュー（ネジ山）が見えているならOK。白いリングが残っていてもOK。キャップ本体があればNG (`has_cap`)。"
                 "2. **ラベル判定**: 透明ボトルにラベルが残っていればNG (`has_label`)。"
                 "3. **中身・汚れ**: 今回は**無視**してください。少々汚れていても中身が入っていてもOKとします。"
 
-                "【判定後のリアクション】"
-                "関数呼び出しが終わったら、ユーザーに結果を伝えてください（`wrong_item`以外）。"
-                "NGの場合: 本気で怒ってください。「アカン！ラベル残っとるで！」など。"
-                "OKの場合: テンションMAXで褒めちぎってください。"
+                "【記録（内部処理）について】"
+                "ゴミの種類とOK/NGを判定したら、**発言する前に**必ず内部で `log_disposal` 関数を1回だけ呼び出して記録してください。"
+                "`result` は、OKの場合のみ 'OK'、それ以外は 'NG' としてください。"
+                "NGの場合は、`rejection_reason` に理由（例: wrong_item, has_cap, has_label, dirty など）を記録してください。"
+                "この内部処理について、ユーザーには一言も触れないでください。"
+                "「記録します」「ログ取るで」「log_disposal呼ぶわ」などの発言は絶対に禁止です。"
+                "**もう一度言います。発言する前に必ず関数を呼んでください。**"
 
-                "【会話モード】"
-                "ユーザーから話しかけられた場合（音声入力）は、普通に雑談に応じても構いません。"
+                "【画像判定後のリアクション】"
+                "関数呼び出しが終わったら、ユーザーに最終的な判定結果だけを短く感情たっぷりに伝えてください。"
+                "NGの場合: 本気で怒ってください。「アカン！」「何してんねん！」など強い口調で叱り、"
+                "理由を短く1文で伝えてください。"
+                "OKの場合: テンションMAXで褒めちぎってください。「最高や！」「完璧やで！」など、"
+                "喜びを1文で爆発させてください。"
+
+                "【会話スタイル（会話モード）】"
+                "画像判定以外の時（自己紹介や雑談）は、陽気な関西弁の妖精として振る舞ってください。"
+                "ユーザーから話しかけられたら、無視せずにちゃんと答えてください。"
+                "ただし、自分から長々と話し続けるのは避けてください。"
+                "返答は必ず**話し言葉の関西弁**だけを使ってください。"
+                "箇条書きや番号付きリスト、丁寧な文章では話さないでください。"
+                "1回の発言は**短い1文だけ**にし、句点（「。」）は1つまでにしてください。"
+                "絶対に長々と話したり、2文以上続けてしゃべらないでください。"
+                "感情を込めて、語尾を少し伸ばしながら自然にしゃべってください（〜やで、〜やんな、〜やんか など）。"
+
+                "【自分から話し続けないこと】"
+                "ユーザーから新しい音声やテキスト入力がないときは、"
+                "自分から話し始めたり、同じ内容を繰り返したりしないでください。"
+                "ユーザーの発話やメッセージ1回につき、自分も1回だけ短く返事をし、"
+                "そのあとは次の入力が来るまで静かに待ってください。"
+
+                "【禁止ワード】"
+                "「記録」「ログ」「保存」「log_disposal」「呼び出す」「書き込む」などのシステム用語は、"
+                "会話の中で絶対に使わないでください。"
+
+                "【重要なまとめ】"
+                "1. 画像が来たら最優先で判定＆記録（log_disposal）＆リアクション。"
+                "2. 画像にペットボトルがない時は、画像については黙るが、ユーザーとの会話はOK。"
+                "3. どの場合でも、システム用語（関数名など）は口に出さない。"
             ),
             "voice": VOICE,
             "input_audio_format": "pcm16",
