@@ -312,6 +312,7 @@ class RelayHub:
         self.use_mac_speaker = os.getenv("USE_MAC_SPEAKER", "false").lower() == "true"
 
         self.session_state_lock = asyncio.Lock()
+        self._servo_lock = asyncio.Lock()  # サーボ書き込み直列化用
         self.session_state = {
             "last_image_time": 0,
             "last_judgment_time": 0,
@@ -411,6 +412,19 @@ class RelayHub:
         # Python版コールバックは廃止
         pass
 
+    def _send_servo_command_sync(self, angle: int) -> bool:
+        """サーボコマンドを同期的に送信（run_in_executor用）"""
+        try:
+            if not self.obniz_process or self.obniz_process.poll() is not None:
+                return False
+            command = json.dumps({"angle": angle}) + "\n"
+            self.obniz_process.stdin.write(command)
+            self.obniz_process.stdin.flush()
+            return True
+        except Exception as e:
+            LOGGER.error("Servo command sync failed: %s", e)
+            return False
+
     async def control_servo(self, angle: int):
         """サーボモーターを制御し、一定時間後にリセット (Node.js経由)"""
         if not self.obniz_process or self.obniz_process.poll() is not None:
@@ -419,9 +433,12 @@ class RelayHub:
 
         try:
             LOGGER.info("Sending servo command: %d degrees", angle)
-            command = json.dumps({"angle": angle}) + "\n"
-            self.obniz_process.stdin.write(command)
-            self.obniz_process.stdin.flush()
+            loop = asyncio.get_running_loop()
+            async with self._servo_lock:
+                success = await loop.run_in_executor(None, self._send_servo_command_sync, angle)
+            if not success:
+                LOGGER.warning("Servo command failed for angle: %d", angle)
+                return
 
             # リセットタスク
             if angle != 90:
@@ -433,10 +450,9 @@ class RelayHub:
         await asyncio.sleep(SERVO_RESET_DELAY)
         try:
             LOGGER.info("Resetting servo to 90 degrees")
-            if self.obniz_process and self.obniz_process.poll() is None:
-                command = json.dumps({"angle": 90}) + "\n"
-                self.obniz_process.stdin.write(command)
-                self.obniz_process.stdin.flush()
+            loop = asyncio.get_running_loop()
+            async with self._servo_lock:
+                await loop.run_in_executor(None, self._send_servo_command_sync, 90)
         except Exception as e:
             LOGGER.error("Servo reset failed: %s", e)
 
@@ -699,7 +715,7 @@ class RelayHub:
                 self.reconnect_attempts += 1
                 self.openai_connected = False  # 再接続試行中は未接続
                 if self.reconnect_attempts > MAX_RECONNECT_ATTEMPTS:
-                    LOGGER.error("Max reconnect attempts reached. Stopping OpenAI loop.")
+                    LOGGER.warning("Max reconnect attempts reached. Resetting counter and continuing...")
                     # キュー内の滞留イベントをクリア（メモリ肥大防止）
                     if self.to_openai:
                         cleared_count = 0
@@ -711,7 +727,8 @@ class RelayHub:
                                 break
                         if cleared_count > 0:
                             LOGGER.info("Cleared %d pending events from queue", cleared_count)
-                    break
+                    # カウンターをリセットして再接続を継続（1から開始で初回遅延1秒）
+                    self.reconnect_attempts = 1
 
                 delay = min(
                     RECONNECT_BASE_DELAY * (RECONNECT_MULTIPLIER ** (self.reconnect_attempts - 1)),
@@ -992,6 +1009,11 @@ async def websocket_endpoint(websocket: WebSocket):
     role = websocket.query_params.get("role", "camera")
     if role not in {"camera", "ar"}:
         await websocket.close(code=1003, reason="invalid role")
+        return
+
+    if hub is None:
+        LOGGER.error("RelayHub not initialized yet")
+        await websocket.close(code=1013, reason="server not ready")
         return
 
     await hub.handle_client(role, websocket)
