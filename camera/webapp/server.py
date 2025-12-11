@@ -563,14 +563,16 @@ class RelayHub:
 
                 # 差分チェックを削除し、常に判定を行う
                 # 背景差分チェック (empty_bin_reference.jpg との比較)
-                if self.reference_image is not None:
-                     if not self._is_image_changed(self.reference_image, current_image_cv2, threshold=IMAGE_DIFF_THRESHOLD):
-                        LOGGER.info("Image matches reference (Empty Bin). Skipping AI processing.")
-                        async with self.session_state_lock:
-                             self.session_state["skip_next_response"] = True
-                        return None
-                     else:
-                        LOGGER.info("Diff detected against reference. Proceeding.")
+                # 背景差分チェック (empty_bin_reference.jpg との比較)
+                # ユーザー要望により、OpenCVでの事前チェックを無効化し、いきなりAI判定へ進む
+                # if self.reference_image is not None:
+                #      if not self._is_image_changed(self.reference_image, current_image_cv2, threshold=IMAGE_DIFF_THRESHOLD):
+                #         LOGGER.info("Image matches reference (Empty Bin). Skipping AI processing.")
+                #         async with self.session_state_lock:
+                #              self.session_state["skip_next_response"] = True
+                #         return None
+                #      else:
+                #         LOGGER.info("Diff detected against reference. Proceeding.")
 
                 # 差分チェックを削除し、常に判定を行う
                 # if not self._is_image_changed(prev_cv2, current_image_cv2, threshold=IMAGE_DIFF_THRESHOLD):
