@@ -803,8 +803,9 @@ class RelayHub:
                             # 簡易的な紐付け: 直近のログを更新する（厳密にはitem_idで紐付けるのがベストだが、Function Call直後の発話とみなす）
                             # 念のため、ログ記録から時間が経ちすぎていないかチェック（例: 10秒以内）
                             try:
+                                JST = timezone(timedelta(hours=9))
                                 log_dt = datetime.datetime.fromisoformat(last_ts)
-                                if (datetime.datetime.now() - log_dt).total_seconds() < 10:
+                                if (datetime.datetime.now(JST) - log_dt).total_seconds() < 10:
                                     # 非同期でDB更新を実行
                                     loop = asyncio.get_running_loop()
                                     await loop.run_in_executor(None, db.update_record_message, "webapp_user", last_ts, transcript_text)
