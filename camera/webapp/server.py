@@ -12,6 +12,7 @@ import os
 import re
 import struct
 import sys
+import atexit
 from functools import partial
 from collections import OrderedDict
 from typing import Any, Dict, Optional
@@ -869,8 +870,22 @@ class RelayHub:
         except Exception as e:
             LOGGER.warning("Failed to send to role=%s: %s", role, e)
 
+    def cleanup(self):
+        """終了時のクリーンアップ"""
+        if self.obniz_process:
+            LOGGER.info("Terminating Obniz bridge...")
+            try:
+                self.obniz_process.terminate()
+                try:
+                    self.obniz_process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self.obniz_process.kill()
+            except Exception as e:
+                LOGGER.error("Failed to terminate Obniz bridge: %s", e)
+
 
 hub = RelayHub()
+atexit.register(hub.cleanup)
 
 
 @app.websocket("/ws")

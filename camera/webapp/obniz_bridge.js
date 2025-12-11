@@ -53,9 +53,13 @@ rl.on("line", (line) => {
 });
 
 // プロセス終了時のクリーンアップ
-process.on("SIGINT", () => {
+// プロセス終了時のクリーンアップ
+const cleanup = () => {
     if (obniz) {
         obniz.close();
     }
     process.exit();
-});
+};
+
+process.on("SIGINT", cleanup);
+process.on("SIGTERM", cleanup);
