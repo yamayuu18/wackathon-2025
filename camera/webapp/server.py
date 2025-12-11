@@ -1168,13 +1168,28 @@ async def handle_function_call(event, ws, session_state: dict, session_state_loc
 
             image_pending = last_image_time > last_judgment_time
 
-            # Realtime API から余分なセミコロンが混入する場合があるため除去
+            # Realtime API から余分な文字が含まれる場合があるためクリーニング
             cleaned_args = args_str.strip()
+            # Markdown Code Block の除去
+            if cleaned_args.startswith("```json"):
+                cleaned_args = cleaned_args[7:]
+            if cleaned_args.startswith("```"):
+                cleaned_args = cleaned_args[3:]
+            if cleaned_args.endswith("```"):
+                cleaned_args = cleaned_args[:-3]
+            
+            cleaned_args = cleaned_args.strip()
+            
+            # 末尾のセミコロン除去
             if cleaned_args.endswith(";"):
                 cleaned_args = cleaned_args[:-1]
             cleaned_args = cleaned_args.replace(";}", "}")
 
-            args = json.loads(cleaned_args)
+            try:
+                args = json.loads(cleaned_args)
+            except json.JSONDecodeError:
+                LOGGER.error("Failed to parse JSON: '%s'", cleaned_args)
+                raise
             has_change = args.get("has_change", False)
             if not image_pending:
                 has_change = False
