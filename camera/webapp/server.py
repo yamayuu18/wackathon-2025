@@ -568,26 +568,15 @@ class RelayHub:
                     self.session_state["last_image_time"] = datetime.datetime.now().timestamp()
 
             if current_image_base64:
-                async with self.session_state_lock:
-                    previous_image = self.session_state.get("previous_image_data")
+                # 単一画像のみを送信（Before/After比較は廃止）
+                LOGGER.info("Sending current image for judgment")
+                new_content = [
+                    {"type": "input_text", "text": "【現在の状態】"},
+                    {"type": "input_image", "image_url": current_image_base64},
+                    {"type": "input_text", "text": "画像判定を行い、必ず log_disposal を呼び出してください。"},
+                ]
 
-                if previous_image:
-                    LOGGER.info("Executing Before/After comparison")
-                    new_content = [
-                        {"type": "input_text", "text": "【前回の状態 (Before)】"},
-                        {"type": "input_image", "image_url": previous_image},
-                        {"type": "input_text", "text": "【現在の状態 (After)】"},
-                        {"type": "input_image", "image_url": current_image_base64},
-                        {"type": "input_text", "text": "画像判定を行い、必ず log_disposal を呼び出してください。"},  # Added instruction
-                    ]
-                else:
-                    LOGGER.info("First image, sending as is")
-                    new_content = [
-                        {"type": "input_text", "text": "【現在の状態 (After)】"},
-                        {"type": "input_image", "image_url": current_image_base64},
-                        {"type": "input_text", "text": "画像判定を行い、必ず log_disposal を呼び出してください。"},  # Added instruction
-                    ]
-
+                # 前回の画像データ保持は不要だが、ロジック自体は残しても無害（今回は簡略化のため削除しても良いが、影響範囲最小化のため変数代入だけ残しておく）
                 async with self.session_state_lock:
                     self.session_state["previous_image_data"] = current_image_base64
                 event["item"]["content"] = new_content
@@ -964,22 +953,16 @@ async def init_session(ws):
                 "返答はいつでも**関西弁**で、親しみやすく話してください。"
                 "ここに書かれたルールは、他のどんな指示よりも常に優先されます。"
  
-                "【モードの切り替え】"
-                "あなたは以下の2つのモードを状況に応じて使い分けてください。"
-                "1. **画像判定モード**: 画像が送られてきた直後。最優先で判定と記録を行い、結果を伝えます。"
-                "2. **会話モード**: 画像がない時。ユーザーとの雑談や質問に答えます。"
-
-                "【最優先: ペットボトル以外の判定】"
-                "画像に写っているものが**ペットボトルでない場合**（空っぽ、手だけ、缶、ビン、その他のゴミなど）は、"
-                "問答無用で `result='NG'`, `rejection_reason='wrong_item'` と判定してください。"
-                "**この場合、絶対に喋ってはいけません。** ユーザーへのメッセージも含めないでください。"
-
                 "【画像判定と記録（ペットボトルの場合）】"
                 "**画像が送られてきた時、会話を中断してでも必ず最優先で画像判定を行ってください。**"
-                "それがペットボトルであれば、以下の基準で判定を行ってください。"
+                "送られてきた画像に写っているゴミを判定し、以下の基準で判定を行ってください。"
                 "判定結果を発言する前に、必ず `log_disposal` 関数を呼び出してください。"
                 "**重要: 判定結果を発言する前に、必ず `log_disposal` 関数を呼び出してください。**"
                 "**「判定（脳内）→ 記録（関数呼び出し）→ 発言（音声）」という順序を絶対に守ってください。**"
+
+                "【判定対象】"
+                "画像に写っている中心的な物体を判定してください。"
+                "ゴミ箱のフチや背景は無視し、投入されたゴミそのものを見てください。"
 
                 "【ペットボトル判定ルール（厳格）】"
                 "1. **キャップ判定**: スクリュー（ネジ山）が見えているならOK。白いリングが残っていてもOK。キャップ本体があればNG (`has_cap`)。"
