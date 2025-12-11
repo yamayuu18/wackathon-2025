@@ -1105,7 +1105,7 @@ async def handle_function_call(event, ws, session_state: dict, session_state_loc
 
             # Obnizサーボ制御
             if has_change:
-                target_angle = 0 if log_data["result"] == "OK" else 180
+                target_angle = 45 if log_data["result"] == "OK" else 135
                 await hub.control_servo(target_angle)
 
             # 判定時刻を更新
