@@ -578,12 +578,14 @@ class RelayHub:
                         {"type": "input_image", "image_url": previous_image},
                         {"type": "input_text", "text": "【現在の状態 (After)】"},
                         {"type": "input_image", "image_url": current_image_base64},
+                        {"type": "input_text", "text": "画像判定を行い、必ず log_disposal を呼び出してください。"},  # Added instruction
                     ]
                 else:
                     LOGGER.info("First image, sending as is")
                     new_content = [
                         {"type": "input_text", "text": "【現在の状態 (After)】"},
                         {"type": "input_image", "image_url": current_image_base64},
+                        {"type": "input_text", "text": "画像判定を行い、必ず log_disposal を呼び出してください。"},  # Added instruction
                     ]
 
                 async with self.session_state_lock:
