@@ -496,6 +496,8 @@ class RelayHub:
                     if processed is None:
                         continue
                     await self._safe_put_to_openai(processed)
+                    # 画像を送った直後に必ずレスポンス生成をトリガーする
+                    await self._safe_put_to_openai({"type": "response.create"})
                     continue
 
                 if event_type == "response.create":
