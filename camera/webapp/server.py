@@ -586,7 +586,8 @@ class RelayHub:
                     self.session_state["previous_image_cv2"] = current_image_cv2
 
                 # 非同期でファイル保存（マイクロ秒付きで一意性を保証）
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                JST = timezone(timedelta(hours=9))
+                timestamp = datetime.datetime.now(JST).strftime("%Y%m%d_%H%M%S_%f")
                 filename = f"{timestamp}.jpg"
                 filepath = os.path.join(self.image_save_dir, filename)
 
