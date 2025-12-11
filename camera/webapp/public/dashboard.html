@@ -332,7 +332,7 @@
 
         .image-preview-container {
             width: 100%;
-            aspect-ratio: 4/3;
+            min-height: 400px; /* 画像エリアを大きく確保 */
             background-color: #f0f0f0;
             border-radius: 12px;
             overflow: hidden;
@@ -344,7 +344,7 @@
         .image-preview-container img {
             width: 100%;
             height: 100%;
-            object-fit: cover;
+            object-fit: contain; /* 全体を表示 */
         }
 
         .image-preview-container .no-image {
