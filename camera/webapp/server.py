@@ -5,6 +5,7 @@ WebSocket Relay Server for OpenAI Realtime API
 import asyncio
 import base64
 import datetime
+from datetime import timezone, timedelta
 import hashlib
 import json
 import logging
@@ -1176,7 +1177,8 @@ async def handle_function_call(event, ws, session_state: dict, session_state_loc
 
             # DB保存
             image_path = "webapp_session" if image_pending else "webapp_chat"
-            timestamp_iso = datetime.datetime.now().isoformat()
+            JST = timezone(timedelta(hours=9))
+            timestamp_iso = datetime.datetime.now(JST).isoformat()
 
             result_json = {
                 "detected_items": [args.get("items")],

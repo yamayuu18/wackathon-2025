@@ -2,7 +2,7 @@ import boto3
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 from decimal import Decimal
 
@@ -35,7 +35,8 @@ class Database:
         
         # Timestamp for Sort Key
         if not timestamp:
-            timestamp = datetime.now().isoformat()
+            JST = timezone(timedelta(hours=9))
+            timestamp = datetime.now(JST).isoformat()
         
         item = {
             'user_id': user_id,              # Partition Key
