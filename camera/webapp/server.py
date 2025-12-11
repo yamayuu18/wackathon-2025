@@ -34,6 +34,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database import Database
 import subprocess
 import shutil
+import cv2
+import numpy as np
 
 # =============================================================================
 # 定数定義
@@ -333,8 +335,21 @@ class RelayHub:
         self.audio_bytes_map: Dict[str, int] = {}
 
         self.openai_task: Optional[asyncio.Task] = None
-        self.cv2 = None
-        self.np = None
+        self.cv2 = cv2
+        self.np = np
+        self.reference_image = None
+        # server.pyと同じディレクトリにあると想定
+        ref_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "empty_bin_reference.jpg")
+        if os.path.exists(ref_path):
+            self.reference_image = cv2.imread(ref_path)
+            LOGGER.info("Loaded reference image: %s", ref_path)
+            # キャッシュ用のBase64作成
+            with open(ref_path, "rb") as image_file:
+                 self.reference_image_base64 = "data:image/jpeg;base64," + base64.b64encode(image_file.read()).decode('utf-8')
+        else:
+            LOGGER.warning("Reference image not found: %s", ref_path)
+            self.reference_image_base64 = None
+
         self.p = None
         self.stream = None
 
@@ -547,6 +562,17 @@ class RelayHub:
                     prev_cv2 = self.session_state.get("previous_image_cv2")
 
                 # 差分チェックを削除し、常に判定を行う
+                # 背景差分チェック (empty_bin_reference.jpg との比較)
+                if self.reference_image is not None:
+                     if not self._is_image_changed(self.reference_image, current_image_cv2, threshold=IMAGE_DIFF_THRESHOLD):
+                        LOGGER.info("Image matches reference (Empty Bin). Skipping AI processing.")
+                        async with self.session_state_lock:
+                             self.session_state["skip_next_response"] = True
+                        return None
+                     else:
+                        LOGGER.info("Diff detected against reference. Proceeding.")
+
+                # 差分チェックを削除し、常に判定を行う
                 # if not self._is_image_changed(prev_cv2, current_image_cv2, threshold=IMAGE_DIFF_THRESHOLD):
                 #     LOGGER.info("Skipped sending image (No change detected)")
                 #     async with self.session_state_lock:
@@ -570,12 +596,24 @@ class RelayHub:
 
             if current_image_base64:
                 # 単一画像のみを送信（Before/After比較は廃止）
+                # ユーザー要望により、基準画像（空のごみ箱）も送って比較させる
                 LOGGER.info("Sending current image for judgment")
-                new_content = [
-                    {"type": "input_text", "text": "【現在の状態】"},
-                    {"type": "input_image", "image_url": current_image_base64},
-                    {"type": "input_text", "text": "画像判定を行い、必ず log_disposal を呼び出してください。"},
-                ]
+                
+                new_content = []
+                if self.reference_image_base64:
+                     new_content.append({"type": "input_text", "text": "【基準画像：空のゴミ箱】"})
+                     new_content.append({"type": "input_image", "image_url": self.reference_image_base64})
+                
+                new_content.append({"type": "input_text", "text": "【現在の画像】"})
+                new_content.append({"type": "input_image", "image_url": current_image_base64})
+                
+                # プロンプトを少し調整して、比較指示を含める
+                instruction_text = (
+                    "画像判定を行い、必ず log_disposal を呼び出してください。"
+                    "【基準画像】と【現在の画像】を比較し、明らかに新しいゴミがない（空のまま）場合は、"
+                    "result='NG', rejection_reason='wrong_item' (空) と判定してください。"
+                )
+                new_content.append({"type": "input_text", "text": instruction_text})
 
                 # 前回の画像データ保持は不要だが、ロジック自体は残しても無害（今回は簡略化のため削除しても良いが、影響範囲最小化のため変数代入だけ残しておく）
                 async with self.session_state_lock:
