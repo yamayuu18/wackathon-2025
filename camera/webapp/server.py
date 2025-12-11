@@ -15,6 +15,7 @@ import sys
 from functools import partial
 from collections import OrderedDict
 from typing import Any, Dict, Optional
+import threading
 
 import uvicorn
 from dotenv import load_dotenv
@@ -339,11 +340,30 @@ class RelayHub:
                         bufsize=1
                     )
                     LOGGER.info("Obniz bridge started: PID=%s", self.obniz_process.pid)
-                    # output reading could be done in a separate thread if needed for debugging
+                    
+                    # 出力をログに転送するスレッドを開始
+                    self._start_output_thread(self.obniz_process.stdout, "stdout")
+                    self._start_output_thread(self.obniz_process.stderr, "stderr")
+
                 except Exception as e:
                     LOGGER.error("Failed to start Obniz bridge: %s", e)
             else:
                 LOGGER.error("Node.js not found. Obniz disabled.")
+
+    def _start_output_thread(self, pipe, name):
+        """サブプロセスの出力をログに転送"""
+        def log_output():
+            try:
+                for line in iter(pipe.readline, ''):
+                    if line:
+                        LOGGER.info(f"[Obniz-{name}] {line.strip()}")
+            except Exception as e:
+                LOGGER.error(f"Error reading Obniz {name}: {e}")
+            finally:
+                pipe.close()
+
+        t = threading.Thread(target=log_output, daemon=True)
+        t.start()
 
     def _on_obniz_connect(self, obniz):
         # Python版コールバックは廃止
