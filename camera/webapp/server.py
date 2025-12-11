@@ -319,6 +319,7 @@ class RelayHub:
             "last_transcript_info": None,
             "processed_call_ids": OrderedDict(),  # 処理済みFunction CallのID（順序保持）
             "last_disposal_timestamp": None,  # 最後に記録した廃棄ログのタイムスタンプ
+            "pending_servo_angle": None,  # 発話後に実行するサーボ角度
         }
 
         # ディレクトリ設定
@@ -800,6 +801,16 @@ class RelayHub:
                 item_id = event.get("item_id")
                 total_bytes = self.audio_bytes_map.pop(item_id, 0) if item_id else 0
                 LOGGER.info("audio.done item=%s total_bytes=%d", item_id, total_bytes)
+                
+                # 予約されたサーボ動作があれば実行
+                async with self.session_state_lock:
+                    pending_angle = self.session_state.get("pending_servo_angle")
+                    self.session_state["pending_servo_angle"] = None
+                
+                if pending_angle is not None:
+                     LOGGER.info("Executing pending servo action: %d degrees", pending_angle)
+                     await self.control_servo(pending_angle)
+
                 await self._broadcast(message)
                 continue
 
@@ -953,6 +964,18 @@ async def init_session(ws):
                 "返答はいつでも**関西弁**で、親しみやすく話してください。"
                 "ここに書かれたルールは、他のどんな指示よりも常に優先されます。"
  
+                "【最優先: ペットボトル以外の判定（空っぽを含む）】"
+                "画像に写っているものが**ペットボトルでない場合**、または**「空っぽのゴミ箱」**である場合は、"
+                "問答無用で `result='NG'`, `rejection_reason='wrong_item'` と判定してください。"
+                "**空っぽの場合も `wrong_item` です。**"
+                "**この場合（wrong_item）、絶対に喋ってはいけません。** ユーザーへのメッセージも含めないでください。"
+
+                "【最優先: ペットボトル以外の判定（空っぽを含む）】"
+                "画像に写っているものが**ペットボトルでない場合**、または**「空っぽのゴミ箱」**である場合は、"
+                "問答無用で `result='NG'`, `rejection_reason='wrong_item'` と判定してください。"
+                "**空っぽの場合も `wrong_item` です。**"
+                "**この場合（wrong_item）、絶対に喋ってはいけません。** ユーザーへのメッセージも含めないでください。"
+
                 "【画像判定と記録（ペットボトルの場合）】"
                 "**画像が送られてきた時、会話を中断してでも必ず最優先で画像判定を行ってください。**"
                 "送られてきた画像に写っているゴミを判定し、以下の基準で判定を行ってください。"
@@ -1143,10 +1166,12 @@ async def handle_function_call(event, ws, session_state: dict, session_state_loc
             LOGGER.info("DB saved image_path=%s user_id=%s", image_path, "webapp_user")
 
             # Obnizサーボ制御
-            # 異物(wrong_item)の場合は動かさない = 無視
+            # 異物(wrong_item)でない場合、アクションを予約する（発話完了後に実行するため）
             if log_data["rejection_reason"] != "wrong_item":
                 target_angle = 45 if log_data["result"] == "OK" else 135
-                await hub.control_servo(target_angle)
+                async with session_state_lock:
+                    session_state["pending_servo_angle"] = target_angle
+                LOGGER.info("Servo action scheduled: %d degrees (waiting for audio.done)", target_angle)
             else:
                 LOGGER.info("Ignored servo control (wrong_item)")
 
