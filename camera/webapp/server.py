@@ -1199,13 +1199,16 @@ async def handle_function_call(event, ws, session_state: dict, session_state_loc
                 "message": message_val
             }
 
-            db.insert_record(
+            # DB保存（非同期化してブロッキングを回避）
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, partial(
+                db.insert_record,
                 image_path=image_path,
                 result_json=result_json,
                 user_id="webapp_user",
                 rejection_reason=args.get("rejection_reason"),
                 timestamp=timestamp_iso
-            )
+            ))
 
             # 判定時刻を更新 & ログ用タイムスタンプを保存
             async with session_state_lock:
