@@ -108,6 +108,7 @@ async def lifespan(app: FastAPI):
     global hub
     hub = RelayHub()
     LOGGER.info("RelayHub initialized")
+    LOGGER.info("AUDIO_ENDPOINT=%s", AUDIO_ENDPOINT)
     yield
     # 終了時
     if hub:
